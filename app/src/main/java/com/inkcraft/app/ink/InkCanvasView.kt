@@ -502,9 +502,47 @@ class InkCanvasView(context: Context) : View(context) {
     }
 
     private fun isPalmOrRejectedTouch(event: MotionEvent): Boolean {
-        if (System.currentTimeMillis() - lastStylusActivityMs < 550L) return true
+        if (System.currentTimeMillis() - lastStylusActivityMs < 300L) return true
         for (i in 0 until event.pointerCount) {
-            if (event.getTouchMajor(i) > 115f) return true
+            if (event.getTouchMajor(i) > 240f) return true
+        }
+        return false
+    }
+
+    private fun handleRulerInteraction(event: MotionEvent, pageX: Float, pageY: Float): Boolean {
+        if (!showRuler) return false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN) {
+            val dx = pageX - rulerCx
+            val dy = pageY - rulerCy
+            val c = cos(-rulerAngleRad)
+            val s = sin(-rulerAngleRad)
+            val localX = dx * c - dy * s
+            val localY = dx * s + dy * c
+            if (localY in -45f..115f && localX in -500f..500f) {
+                rulerMode = if (kotlin.math.abs(localX) > 290f) 2 else 1
+                lastDragX = pageX
+                lastDragY = pageY
+                return true
+            }
+        }
+        if (rulerMode != 0) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_MOVE -> {
+                    if (rulerMode == 1) {
+                        rulerCx += pageX - lastDragX
+                        rulerCy += pageY - lastDragY
+                    } else if (rulerMode == 2) {
+                        val a1 = atan2(lastDragY - rulerCy, lastDragX - rulerCx)
+                        val a2 = atan2(pageY - rulerCy, pageX - rulerCx)
+                        rulerAngleRad += (a2 - a1)
+                    }
+                    lastDragX = pageX
+                    lastDragY = pageY
+                    invalidate()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> rulerMode = 0
+            }
+            return true
         }
         return false
     }
@@ -516,7 +554,14 @@ class InkCanvasView(context: Context) : View(context) {
         if (hasStylus) {
             lastStylusActivityMs = System.currentTimeMillis()
             isPanning = false
+            fingerScrollActive = false
         } else {
+            // Allow moving & rotating the Ruler ("scale") with a finger even in Stylus-Only mode
+            val (fingerPageX, fingerPageY) = screenToPage(event.x, event.y)
+            if (event.pointerCount == 1 && !isPalmOrRejectedTouch(event) && handleRulerInteraction(event, fingerPageX, fingerPageY)) {
+                return true
+            }
+
             if (pageLocked) {
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                     val (px, py) = screenToPage(event.x, event.y)
@@ -560,7 +605,7 @@ class InkCanvasView(context: Context) : View(context) {
             }
 
             if (stylusOnlyMode) {
-                if (isPalmOrRejectedTouch(event) || event.getTouchMajor(0) > 85f) {
+                if (isPalmOrRejectedTouch(event)) {
                     fingerScrollActive = false
                     isPanning = false
                     return true
@@ -584,7 +629,6 @@ class InkCanvasView(context: Context) : View(context) {
                         if (fingerScrollActive) {
                             val dy = event.y - prevFocusY
                             prevFocusY = event.y
-                            // Scroll vertically only so page never drifts sideways while scrolling
                             if (kotlin.math.abs(event.y - fingerStartY) > 12f) {
                                 panY += dy
                                 clampPan()
@@ -597,7 +641,7 @@ class InkCanvasView(context: Context) : View(context) {
                         if (fingerScrollActive) {
                             val totalDx = event.x - fingerStartX
                             val totalDy = event.y - fingerStartY
-                            if (kotlin.math.abs(totalDx) > 130f && kotlin.math.abs(totalDx) > kotlin.math.abs(totalDy) * 1.35f) {
+                            if (kotlin.math.abs(totalDx) > 105f && kotlin.math.abs(totalDx) > kotlin.math.abs(totalDy) * 1.25f) {
                                 onPageSwipe?.invoke(if (totalDx < 0f) 1 else -1)
                             }
                         }
@@ -643,40 +687,7 @@ class InkCanvasView(context: Context) : View(context) {
 
         val (pageX, pageY) = screenToPage(rawX, rawY)
 
-        // Ruler interactive move (center) or rotate (end handles)
-        if (showRuler && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
-            val dx = pageX - rulerCx
-            val dy = pageY - rulerCy
-            val c = cos(-rulerAngleRad)
-            val s = sin(-rulerAngleRad)
-            val localX = dx * c - dy * s
-            val localY = dx * s + dy * c
-            if (localY in -20f..90f && localX in -480f..480f) {
-                rulerMode = if (kotlin.math.abs(localX) > 350f) 2 else 1
-                lastDragX = pageX
-                lastDragY = pageY
-                return true
-            }
-        }
-        if (rulerMode != 0) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_MOVE -> {
-                    if (rulerMode == 1) {
-                        rulerCx += pageX - lastDragX
-                        rulerCy += pageY - lastDragY
-                    } else if (rulerMode == 2) {
-                        val a1 = atan2(lastDragY - rulerCy, lastDragX - rulerCx)
-                        val a2 = atan2(pageY - rulerCy, pageX - rulerCx)
-                        rulerAngleRad += (a2 - a1)
-                    }
-                    lastDragX = pageX
-                    lastDragY = pageY
-                    invalidate()
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> rulerMode = 0
-            }
-            return true
-        }
+        if (handleRulerInteraction(event, pageX, pageY)) return true
 
         if (toolMode == ToolMode.TEXT_BOX && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val hitTb = page.textBoxes.lastOrNull { pageX in it.x..(it.x + it.width) && pageY in it.y..(it.y + 120f) }

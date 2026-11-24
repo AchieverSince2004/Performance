@@ -577,6 +577,15 @@ fun EditorScreen(
                                 val next = safePageIdx + delta
                                 if (next in 0..notebook.pages.lastIndex) {
                                     currentPageIdx = next
+                                } else if (delta > 0) {
+                                    val newPage = NotePage(
+                                        pageIndex = notebook.pages.size,
+                                        template = currentPage.template,
+                                        paperColor = currentPage.paperColor
+                                    )
+                                    val updated = notebook.pages + newPage
+                                    onUpdateNotebook(notebook.copy(pages = updated))
+                                    currentPageIdx = updated.lastIndex
                                 }
                             }
                         },
