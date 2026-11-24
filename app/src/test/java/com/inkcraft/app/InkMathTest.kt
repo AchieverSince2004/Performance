@@ -108,4 +108,21 @@ class InkMathTest {
         assertTrue(insights.keyPoints.isNotEmpty())
         assertEquals(2, insights.actionItems.size)
     }
+
+    @Test
+    fun lassoScaleAndRotateTransformStrokes() {
+        val stroke = Stroke(
+            points = listOf(StrokePoint(10f, 0f), StrokePoint(20f, 0f)),
+            colorArgb = 0xFF000000,
+            baseWidth = 4f,
+            penStyle = PenStyle.FOUNTAIN
+        )
+        val scaled = InkMath.scaleStrokeAround(stroke, 0f, 0f, 2f)
+        assertEquals(20f, scaled.points[0].x, 0.01f)
+        assertEquals(40f, scaled.points[1].x, 0.01f)
+
+        val rotated = InkMath.rotateStrokeAround(stroke, 0f, 0f, (Math.PI / 2.0).toFloat())
+        assertEquals(0f, rotated.points[0].x, 0.1f)
+        assertEquals(10f, rotated.points[0].y, 0.1f)
+    }
 }

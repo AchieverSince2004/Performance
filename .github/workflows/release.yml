@@ -47,20 +47,21 @@ jobs:
           fi
           mkdir -p dist
           "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:inkcraft123 \
-            --key-pass pass:inkcraft123 --out dist/InkCraft-v2.0.0.apk "$RAW_APK"
+            --key-pass pass:inkcraft123 --out dist/Vellum-v3.0.0.apk "$RAW_APK"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v2.0.0' }}
-          name: InkCraft Studio v2.0.0 (macOS Aesthetic + On-Device ML)
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v3.0.0' }}
+          name: Vellum Studio v3.0.0
           body: |
-            ### InkCraft Studio v2.0.0
-            Download `InkCraft-v2.0.0.apk` directly on your Android tablet and tap to install!
+            ### Vellum Studio v3.0.0
+            Download `Vellum-v3.0.0.apk` directly on your Android tablet and tap to install!
 
-            **What's New in v2.0.0:**
-            - **macOS Studio Aesthetics**: Frosted-glass floating dock, unified titlebar, Apple-inspired neutral palette, and crisp hairline borders.
-            - **Pro Palm Rejection**: Ignores resting palms & hover-cooldowns so your page never jumps while writing with your hand on the screen, plus a 1-tap Page Lock.
-            - **On-Device ML Handwriting-to-Text**: Powered by Google ML Kit Digital Ink Recognition — convert handwritten pages into clean digital text offline.
-            - **AI Voice Read-Aloud & Smart Summary**: Listen to your handwritten notes spoken aloud via TTS and extract key bullets/action items.
-          files: dist/InkCraft-v2.0.0.apk
+            **What's New in v3.0.0:**
+            - **Pro Ribbon Ink Engine**: Subdivided Catmull-Rom variable-width ribbon rendering with velocity + pressure + tilt dynamics, Graphite Pencil, and 45° Calligraphy Nib.
+            - **Constrained Smooth Page Viewport**: Defaults to crisp Fit-Width sizing, remembers your preferred page scale, and constrains horizontal drift.
+            - **Interactive Ruler, Lasso & Text Boxes**: Drag & rotate the straightedge ruler with live angle readout, scale/rotate/move lasso selections, and place editable text boxes.
+            - **18 Pro Paper Templates**: Added Engineering Grid, Hexagonal Chemistry, Storyboard, Wireframe UI, Guitar Tab, Monthly Calendar, Habit Tracker, and Meeting Minutes.
+            - **Refined macOS Typography & Vellum App Icon**.
+          files: dist/Vellum-v3.0.0.apk

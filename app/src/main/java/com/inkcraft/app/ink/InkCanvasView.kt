@@ -5,7 +5,6 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
-import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RectF
@@ -20,25 +19,25 @@ import com.inkcraft.app.model.PenStyle
 import com.inkcraft.app.model.StickyNote
 import com.inkcraft.app.model.Stroke
 import com.inkcraft.app.model.StrokePoint
+import com.inkcraft.app.model.TextBox
 import com.inkcraft.app.model.ToolMode
+import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
 
 /**
- * Custom hardware-accelerated tablet stylus canvas.
- * Handles:
- * - True stylus pressure, tilt, historical event batching (120/240Hz)
- * - Stylus-only palm rejection + 2-finger pinch zoom & pan
- * - Stylus side-button & flip-eraser auto-detection
- * - Hold-to-snap shape recognition
- * - Straightedge ruler overlay & snapping
- * - Lasso selection & drag-to-move
- * - Ephemeral laser pointer trails
+ * Hardware-accelerated tablet stylus canvas with:
+ * - Zero-drift constrained viewport & persistent user zoom
+ * - True palm rejection (stylus pointer tracking + 550ms hover/lift cooldown + touchMajor filter)
+ * - Interactive movable & rotatable straightedge ruler with live angle readout
+ * - Lasso selection with move, scale, rotate, recolor, duplicate, delete
+ * - Draggable Sticky Notes & Text Boxes
  */
 class InkCanvasView(context: Context) : View(context) {
 
-    // Page & content state
     var page: NotePage = NotePage()
         set(value) {
             field = value
@@ -57,22 +56,21 @@ class InkCanvasView(context: Context) : View(context) {
             invalidate()
         }
 
-    // Active tool configuration
     var toolMode: ToolMode = ToolMode.PEN
     var penStyle: PenStyle = PenStyle.FOUNTAIN
-    var penColorArgb: Long = 0xFF111827
-    var penWidth: Float = 5.0f
+    var penColorArgb: Long = 0xFF1D1D1F
+    var penWidth: Float = 5.2f
     var stylusOnlyMode: Boolean = true
     var pageLocked: Boolean = false
     var shapeRecognitionEnabled: Boolean = true
-    private var lastStylusActivityMs: Long = 0L
     var showRuler: Boolean = false
         set(value) {
             field = value
             invalidate()
         }
 
-    // Viewport transform (page coordinates -> screen coordinates)
+    private var lastStylusActivityMs: Long = 0L
+
     var zoomScale: Float = 1f
         private set
     var panX: Float = 0f
@@ -81,37 +79,36 @@ class InkCanvasView(context: Context) : View(context) {
         private set
     private var hasInitializedFit = false
 
-    // Callbacks to ViewModel / Compose state
     var onStrokeCommitted: ((Stroke) -> Unit)? = null
     var onStrokesReplaced: ((List<Stroke>) -> Unit)? = null
     var onStickyNoteTapped: ((StickyNote) -> Unit)? = null
     var onStickyNoteAdded: ((Float, Float) -> Unit)? = null
+    var onStickyNoteMoved: ((String, Float, Float) -> Unit)? = null
+    var onTextBoxTapped: ((TextBox) -> Unit)? = null
+    var onTextBoxAdded: ((Float, Float) -> Unit)? = null
     var onViewportChanged: ((Float, Float, Float) -> Unit)? = null
     var onLassoSelectionChanged: ((Set<String>) -> Unit)? = null
 
-    // Active drawing state
     private val activePoints = mutableListOf<StrokePoint>()
     private var isDrawing = false
     private var isErasing = false
 
-    // Lasso state
     private val lassoPoints = mutableListOf<StrokePoint>()
     private var selectedStrokeIds = mutableSetOf<String>()
     private var isDraggingSelection = false
+    private var draggingStickyId: String? = null
     private var lastDragX = 0f
     private var lastDragY = 0f
 
-    // Laser pointer ephemeral strokes
     private data class LaserTrail(val stroke: Stroke, val createdAt: Long)
     private val laserTrails = mutableListOf<LaserTrail>()
 
-    // Ruler state in page coordinates
+    // Ruler state
     private var rulerCx = InkMath.PAGE_WIDTH * 0.5f
     private var rulerCy = InkMath.PAGE_HEIGHT * 0.35f
     private var rulerAngleRad = 0f
-    private var isDraggingRuler = false
+    private var rulerMode = 0 // 0=none, 1=drag, 2=rotate
 
-    // Hold-to-snap timer
     private val handler = Handler(Looper.getMainLooper())
     private var lastMoveTime = 0L
     private var shapeSnappedForCurrentStroke = false
@@ -141,7 +138,6 @@ class InkCanvasView(context: Context) : View(context) {
         }
     }
 
-    // Two-finger pan & pinch zoom
     private var isPanning = false
     private var prevFocusX = 0f
     private var prevFocusY = 0f
@@ -151,11 +147,12 @@ class InkCanvasView(context: Context) : View(context) {
         object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
             override fun onScale(detector: ScaleGestureDetector): Boolean {
                 val oldScale = zoomScale
-                val newScale = (zoomScale * detector.scaleFactor).coerceIn(0.35f, 4.5f)
+                val newScale = (zoomScale * detector.scaleFactor).coerceIn(0.45f, 3.5f)
                 val factor = newScale / oldScale
                 panX = detector.focusX - (detector.focusX - panX) * factor
                 panY = detector.focusY - (detector.focusY - panY) * factor
                 zoomScale = newScale
+                clampPan()
                 onViewportChanged?.invoke(zoomScale, panX, panY)
                 invalidate()
                 return true
@@ -164,35 +161,44 @@ class InkCanvasView(context: Context) : View(context) {
     )
 
     private val shadowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x22000000
+        color = 0x1E000000
         style = Paint.Style.FILL
     }
-
     private val lassoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF3B82F6.toInt()
+        color = 0xFF007AFF.toInt()
         strokeWidth = 3f
         style = Paint.Style.STROKE
         pathEffect = DashPathEffect(floatArrayOf(14f, 10f), 0f)
     }
-
     private val selectionBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0x333B82F6
+        color = 0x26007AFF
         style = Paint.Style.FILL
     }
-
     private val stickyPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val stickyTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xFF1F2937.toInt()
-        textSize = 24f
+        color = 0xFF1D1D1F.toInt()
+        textSize = 23f
     }
-
+    private val textBoxPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF1D1D1F.toInt()
+        textSize = 28f
+    }
     private val rulerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = 0xCC1E293B.toInt()
+        color = 0xDD1C1F26.toInt()
         style = Paint.Style.FILL
     }
     private val rulerTickPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFFF8FAFC.toInt()
         strokeWidth = 2f
+    }
+    private val rulerHandlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFF007AFF.toInt()
+        style = Paint.Style.FILL
+    }
+    private val rulerAnglePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0xFFF8FAFC.toInt()
+        textSize = 20f
+        textAlign = Paint.Align.CENTER
     }
 
     init {
@@ -204,26 +210,68 @@ class InkCanvasView(context: Context) : View(context) {
         if (!hasInitializedFit && w > 0 && h > 0) {
             fitPageToWidth(w, h)
             hasInitializedFit = true
+        } else if (w > 0 && h > 0) {
+            clampPan(w, h)
         }
     }
 
+    /**
+     * Fits the page to fill the tablet width comfortably (no tiny page!).
+     */
     fun fitPageToWidth(w: Int = width, h: Int = height) {
         if (w <= 0 || h <= 0) return
-        val padding = 48f
-        val scaleX = (w - padding * 2) / InkMath.PAGE_WIDTH
-        val scaleY = (h - padding * 2) / InkMath.PAGE_HEIGHT
-        zoomScale = minOf(scaleX, scaleY * 1.15f).coerceIn(0.4f, 2.0f)
+        zoomScale = ((w - 40f) / InkMath.PAGE_WIDTH).coerceIn(0.55f, 2.2f)
         panX = (w - InkMath.PAGE_WIDTH * zoomScale) * 0.5f
-        panY = 32f
+        panY = 24f
+        clampPan(w, h)
+        onViewportChanged?.invoke(zoomScale, panX, panY)
+        invalidate()
+    }
+
+    /**
+     * Sets a fixed zoom scale centered on the screen and keeps it locked.
+     */
+    fun setFixedZoom(newScale: Float) {
+        if (width <= 0 || height <= 0) {
+            zoomScale = newScale.coerceIn(0.45f, 3.5f)
+            return
+        }
+        val clamped = newScale.coerceIn(0.45f, 3.5f)
+        val cx = width * 0.5f
+        val cy = height * 0.35f
+        val factor = clamped / zoomScale
+        panX = cx - (cx - panX) * factor
+        panY = cy - (cy - panY) * factor
+        zoomScale = clamped
+        clampPan()
         onViewportChanged?.invoke(zoomScale, panX, panY)
         invalidate()
     }
 
     fun setViewport(scale: Float, px: Float, py: Float) {
-        zoomScale = scale.coerceIn(0.35f, 4.5f)
+        zoomScale = scale.coerceIn(0.45f, 4.5f)
         panX = px
         panY = py
         invalidate()
+    }
+
+    /**
+     * Prevents the page from sliding off-screen horizontally or vertically.
+     */
+    private fun clampPan(w: Int = width, h: Int = height) {
+        if (w <= 0 || h <= 0) return
+        val contentW = InkMath.PAGE_WIDTH * zoomScale
+        val contentH = InkMath.PAGE_HEIGHT * zoomScale
+        panX = if (contentW <= w - 16f) {
+            (w - contentW) * 0.5f
+        } else {
+            val minX = w - contentW - 32f
+            val maxX = 32f
+            panX.coerceIn(minX, maxX)
+        }
+        val minY = min(24f, h - contentH - 48f)
+        val maxY = 24f
+        panY = panY.coerceIn(minY, maxY)
     }
 
     fun clearSelection() {
@@ -248,6 +296,51 @@ class InkCanvasView(context: Context) : View(context) {
         onStrokesReplaced?.invoke(updated)
     }
 
+    fun duplicateSelectedStrokes() {
+        if (selectedStrokeIds.isEmpty()) return
+        val copies = page.strokes.filter { it.id in selectedStrokeIds }.map {
+            InkMath.translateStroke(it, 36f, 36f).copy(id = java.util.UUID.randomUUID().toString())
+        }
+        selectedStrokeIds = copies.map { it.id }.toMutableSet()
+        onLassoSelectionChanged?.invoke(selectedStrokeIds.toSet())
+        onStrokesReplaced?.invoke(page.strokes + copies)
+    }
+
+    fun scaleSelectedStrokes(factor: Float) {
+        val (cx, cy) = selectionCenter() ?: return
+        val updated = page.strokes.map { s ->
+            if (s.id in selectedStrokeIds) InkMath.scaleStrokeAround(s, cx, cy, factor) else s
+        }
+        onStrokesReplaced?.invoke(updated)
+    }
+
+    fun rotateSelectedStrokes(angleDeg: Float) {
+        val (cx, cy) = selectionCenter() ?: return
+        val rad = Math.toRadians(angleDeg.toDouble()).toFloat()
+        val updated = page.strokes.map { s ->
+            if (s.id in selectedStrokeIds) InkMath.rotateStrokeAround(s, cx, cy, rad) else s
+        }
+        onStrokesReplaced?.invoke(updated)
+    }
+
+    private fun selectionCenter(): Pair<Float, Float>? {
+        val selected = page.strokes.filter { it.id in selectedStrokeIds }
+        if (selected.isEmpty()) return null
+        var minX = Float.MAX_VALUE
+        var minY = Float.MAX_VALUE
+        var maxX = -Float.MAX_VALUE
+        var maxY = -Float.MAX_VALUE
+        for (s in selected) {
+            for (p in s.points) {
+                minX = min(minX, p.x)
+                minY = min(minY, p.y)
+                maxX = max(maxX, p.x)
+                maxY = max(maxY, p.y)
+            }
+        }
+        return ((minX + maxX) * 0.5f) to ((minY + maxY) * 0.5f)
+    }
+
     private fun screenToPage(sx: Float, sy: Float): Pair<Float, Float> {
         return ((sx - panX) / zoomScale) to ((sy - panY) / zoomScale)
     }
@@ -260,18 +353,15 @@ class InkCanvasView(context: Context) : View(context) {
         canvas.translate(panX, panY)
         canvas.scale(zoomScale, zoomScale)
 
-        // Page drop shadow
         canvas.drawRoundRect(
-            10f, 14f,
-            InkMath.PAGE_WIDTH + 10f, InkMath.PAGE_HEIGHT + 14f,
+            8f, 12f,
+            InkMath.PAGE_WIDTH + 8f, InkMath.PAGE_HEIGHT + 12f,
             12f, 12f, shadowPaint
         )
 
-        // Clip to page bounds
         canvas.save()
         canvas.clipRect(0f, 0f, InkMath.PAGE_WIDTH, InkMath.PAGE_HEIGHT)
 
-        // 1. Paper template or PDF background
         val pdfBmp = pdfBackgroundBitmap
         if (pdfBmp != null) {
             canvas.drawColor(Color.WHITE)
@@ -280,12 +370,11 @@ class InkCanvasView(context: Context) : View(context) {
             PaperTemplates.drawPaper(canvas, InkMath.PAGE_WIDTH, InkMath.PAGE_HEIGHT, page.template, page.paperColor)
         }
 
-        // 2. Embedded images
         for (img in page.images) {
-            drawCanvasImage(canvas, img)
+            val bmp = imageBitmaps[img.fileName] ?: continue
+            canvas.drawBitmap(bmp, null, RectF(img.x, img.y, img.x + img.width, img.y + img.height), null)
         }
 
-        // 3. Committed strokes
         for (stroke in page.strokes) {
             StrokeRenderer.drawStroke(canvas, stroke)
             if (stroke.id in selectedStrokeIds) {
@@ -293,12 +382,20 @@ class InkCanvasView(context: Context) : View(context) {
             }
         }
 
-        // 4. Sticky notes
+        for (tb in page.textBoxes) {
+            textBoxPaint.color = tb.colorArgb.toInt()
+            textBoxPaint.textSize = tb.fontSize
+            var ty = tb.y + tb.fontSize
+            for (line in tb.text.split("\n")) {
+                canvas.drawText(line, tb.x, ty, textBoxPaint)
+                ty += tb.fontSize * 1.32f
+            }
+        }
+
         for (note in page.stickyNotes) {
             drawStickyNote(canvas, note)
         }
 
-        // 5. Active in-progress stroke
         if (isDrawing && activePoints.isNotEmpty()) {
             val preview = Stroke(
                 points = activePoints,
@@ -310,7 +407,6 @@ class InkCanvasView(context: Context) : View(context) {
             StrokeRenderer.drawStroke(canvas, preview)
         }
 
-        // 6. Ephemeral laser trails
         val now = System.currentTimeMillis()
         for (trail in laserTrails) {
             val age = (now - trail.createdAt) / 1600f
@@ -318,17 +414,13 @@ class InkCanvasView(context: Context) : View(context) {
             StrokeRenderer.drawStroke(canvas, trail.stroke, alpha)
         }
 
-        // 7. Lasso path
         if (lassoPoints.size >= 2) {
             val path = Path()
             path.moveTo(lassoPoints[0].x, lassoPoints[0].y)
-            for (i in 1 until lassoPoints.size) {
-                path.lineTo(lassoPoints[i].x, lassoPoints[i].y)
-            }
+            for (i in 1 until lassoPoints.size) path.lineTo(lassoPoints[i].x, lassoPoints[i].y)
             canvas.drawPath(path, lassoPaint)
         }
 
-        // 8. Straightedge ruler overlay
         if (showRuler) {
             drawRuler(canvas)
         }
@@ -337,21 +429,16 @@ class InkCanvasView(context: Context) : View(context) {
         canvas.restore()
     }
 
-    private fun drawCanvasImage(canvas: Canvas, img: CanvasImage) {
-        val bmp = imageBitmaps[img.fileName] ?: return
-        canvas.drawBitmap(bmp, null, RectF(img.x, img.y, img.x + img.width, img.y + img.height), null)
-    }
-
     private fun drawStickyNote(canvas: Canvas, note: StickyNote) {
-        stickyPaint.color = 0x28000000
+        stickyPaint.color = 0x26000000
         canvas.drawRoundRect(note.x + 4f, note.y + 6f, note.x + note.width + 4f, note.y + note.height + 6f, 12f, 12f, stickyPaint)
         stickyPaint.color = note.colorArgb.toInt()
         canvas.drawRoundRect(note.x, note.y, note.x + note.width, note.y + note.height, 12f, 12f, stickyPaint)
         val lines = note.text.ifBlank { "Tap to edit note..." }.split("\n")
         var ty = note.y + 40f
-        for (line in lines.take(6)) {
-            canvas.drawText(line.take(24), note.x + 18f, ty, stickyTextPaint)
-            ty += 30f
+        for (line in lines.take(7)) {
+            canvas.drawText(line.take(26), note.x + 18f, ty, stickyTextPaint)
+            ty += 28f
         }
     }
 
@@ -373,10 +460,11 @@ class InkCanvasView(context: Context) : View(context) {
     private fun drawRuler(canvas: Canvas) {
         canvas.save()
         canvas.translate(rulerCx, rulerCy)
-        canvas.rotate(Math.toDegrees(rulerAngleRad.toDouble()).toFloat())
+        val deg = Math.toDegrees(rulerAngleRad.toDouble()).toFloat()
+        canvas.rotate(deg)
         val halfLen = 460f
         val halfThick = 34f
-        canvas.drawRoundRect(-halfLen, 0f, halfLen, halfThick * 2f, 8f, 8f, rulerPaint)
+        canvas.drawRoundRect(-halfLen, 0f, halfLen, halfThick * 2f, 10f, 10f, rulerPaint)
         var x = -halfLen + 20f
         var tick = 0
         while (x <= halfLen - 20f) {
@@ -385,6 +473,11 @@ class InkCanvasView(context: Context) : View(context) {
             x += 20f
             tick++
         }
+        // Rotation handles at both ends + angle badge in center
+        canvas.drawCircle(-halfLen + 30f, halfThick, 14f, rulerHandlePaint)
+        canvas.drawCircle(halfLen - 30f, halfThick, 14f, rulerHandlePaint)
+        val normDeg = ((deg % 360f) + 360f) % 360f
+        canvas.drawText("${normDeg.toInt()}°", 0f, halfThick + 10f, rulerAnglePaint)
         canvas.restore()
     }
 
@@ -398,19 +491,15 @@ class InkCanvasView(context: Context) : View(context) {
     private fun findStylusPointerIndex(event: MotionEvent): Int {
         for (i in 0 until event.pointerCount) {
             val t = event.getToolType(i)
-            if (t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER) {
-                return i
-            }
+            if (t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER) return i
         }
         return -1
     }
 
     private fun isPalmOrRejectedTouch(event: MotionEvent): Boolean {
-        val now = System.currentTimeMillis()
-        if (now - lastStylusActivityMs < 550L) return true
+        if (System.currentTimeMillis() - lastStylusActivityMs < 550L) return true
         for (i in 0 until event.pointerCount) {
-            val major = event.getTouchMajor(i)
-            if (major > 115f) return true
+            if (event.getTouchMajor(i) > 115f) return true
         }
         return false
     }
@@ -423,20 +512,17 @@ class InkCanvasView(context: Context) : View(context) {
             lastStylusActivityMs = System.currentTimeMillis()
             isPanning = false
         } else {
-            // No stylus in this event: handle finger/palm rejection & deliberate 2-finger zoom/pan
             if (pageLocked) {
                 if (event.actionMasked == MotionEvent.ACTION_DOWN) {
                     val (px, py) = screenToPage(event.x, event.y)
-                    val hitNote = page.stickyNotes.lastOrNull {
-                        px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height)
+                    page.stickyNotes.lastOrNull { px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height) }?.let {
+                        onStickyNoteTapped?.invoke(it)
                     }
-                    if (hitNote != null) onStickyNoteTapped?.invoke(hitNote)
                 }
                 return true
             }
 
             if (event.pointerCount >= 2) {
-                // Only allow 2-finger zoom/pan if no stylus was recently active and neither contact is a palm
                 if (!isPalmOrRejectedTouch(event) && toolMode != ToolMode.LASSO) {
                     isDrawing = false
                     isErasing = false
@@ -455,6 +541,7 @@ class InkCanvasView(context: Context) : View(context) {
                                 panY += focusY - prevFocusY
                                 prevFocusX = focusX
                                 prevFocusY = focusY
+                                clampPan()
                                 onViewportChanged?.invoke(zoomScale, panX, panY)
                                 invalidate()
                             }
@@ -467,23 +554,17 @@ class InkCanvasView(context: Context) : View(context) {
                 return true
             }
 
-            // Single-finger touch when Stylus-Only mode is enabled: NEVER pan the page!
-            // This prevents resting or sliding your palm from moving the canvas.
             if (stylusOnlyMode) {
                 if (event.actionMasked == MotionEvent.ACTION_DOWN && !isPalmOrRejectedTouch(event)) {
                     val (px, py) = screenToPage(event.x, event.y)
-                    val hitNote = page.stickyNotes.lastOrNull {
-                        px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height)
-                    }
-                    if (hitNote != null) {
-                        onStickyNoteTapped?.invoke(hitNote)
+                    page.stickyNotes.lastOrNull { px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height) }?.let {
+                        onStickyNoteTapped?.invoke(it)
                     }
                 }
                 isPanning = false
                 return true
             }
 
-            // Explicit PAN_ONLY mode with single finger
             if (toolMode == ToolMode.PAN_ONLY) {
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
@@ -497,6 +578,7 @@ class InkCanvasView(context: Context) : View(context) {
                             panY += event.y - prevFocusY
                             prevFocusX = event.x
                             prevFocusY = event.y
+                            clampPan()
                             onViewportChanged?.invoke(zoomScale, panX, panY)
                             invalidate()
                         }
@@ -514,62 +596,92 @@ class InkCanvasView(context: Context) : View(context) {
         val isStylusEraser = toolType == MotionEvent.TOOL_TYPE_ERASER ||
             (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
 
-        if (toolMode == ToolMode.PAN_ONLY && !isStylusEraser) {
-            return true
-        }
+        if (toolMode == ToolMode.PAN_ONLY && !isStylusEraser) return true
 
         val (pageX, pageY) = screenToPage(rawX, rawY)
 
-        // Dragging ruler if touched near its center body
+        // Ruler interactive move (center) or rotate (end handles)
         if (showRuler && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
-            val distToRuler = hypot(pageX - rulerCx, pageY - rulerCy)
-            if (distToRuler < 70f) {
-                isDraggingRuler = true
+            val dx = pageX - rulerCx
+            val dy = pageY - rulerCy
+            val c = cos(-rulerAngleRad)
+            val s = sin(-rulerAngleRad)
+            val localX = dx * c - dy * s
+            val localY = dx * s + dy * c
+            if (localY in -20f..90f && localX in -480f..480f) {
+                rulerMode = if (kotlin.math.abs(localX) > 350f) 2 else 1
                 lastDragX = pageX
                 lastDragY = pageY
                 return true
             }
         }
-        if (isDraggingRuler) {
+        if (rulerMode != 0) {
             when (event.actionMasked) {
                 MotionEvent.ACTION_MOVE -> {
-                    rulerCx += pageX - lastDragX
-                    rulerCy += pageY - lastDragY
+                    if (rulerMode == 1) {
+                        rulerCx += pageX - lastDragX
+                        rulerCy += pageY - lastDragY
+                    } else if (rulerMode == 2) {
+                        val a1 = atan2(lastDragY - rulerCy, lastDragX - rulerCx)
+                        val a2 = atan2(pageY - rulerCy, pageX - rulerCx)
+                        rulerAngleRad += (a2 - a1)
+                    }
                     lastDragX = pageX
                     lastDragY = pageY
                     invalidate()
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> isDraggingRuler = false
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> rulerMode = 0
             }
             return true
         }
 
-        // Sticky note placement or tap
-        if (toolMode == ToolMode.STICKY_NOTE && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
-            val hitNote = page.stickyNotes.lastOrNull {
-                pageX in it.x..(it.x + it.width) && pageY in it.y..(it.y + it.height)
-            }
-            if (hitNote != null) {
-                onStickyNoteTapped?.invoke(hitNote)
-            } else {
-                onStickyNoteAdded?.invoke(pageX, pageY)
+        if (toolMode == ToolMode.TEXT_BOX && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
+            val hitTb = page.textBoxes.lastOrNull { pageX in it.x..(it.x + it.width) && pageY in it.y..(it.y + 120f) }
+            if (hitTb != null) onTextBoxTapped?.invoke(hitTb) else onTextBoxAdded?.invoke(pageX, pageY)
+            return true
+        }
+
+        if (toolMode == ToolMode.STICKY_NOTE) {
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN, MotionEvent.ACTION_POINTER_DOWN -> {
+                    val hitNote = page.stickyNotes.lastOrNull { pageX in it.x..(it.x + it.width) && pageY in it.y..(it.y + it.height) }
+                    if (hitNote != null) {
+                        draggingStickyId = hitNote.id
+                        lastDragX = pageX
+                        lastDragY = pageY
+                    } else {
+                        onStickyNoteAdded?.invoke(pageX, pageY)
+                    }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val id = draggingStickyId ?: return true
+                    val dx = pageX - lastDragX
+                    val dy = pageY - lastDragY
+                    lastDragX = pageX
+                    lastDragY = pageY
+                    onStickyNoteMoved?.invoke(id, dx, dy)
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> {
+                    val id = draggingStickyId
+                    if (id != null && hypot(pageX - lastDragX, pageY - lastDragY) < 4f) {
+                        page.stickyNotes.find { it.id == id }?.let { onStickyNoteTapped?.invoke(it) }
+                    }
+                    draggingStickyId = null
+                }
             }
             return true
         }
 
-        // Eraser mode (either selected tool OR stylus flip/side-button)
         if (isStylusEraser || toolMode == ToolMode.ERASER_STROKE || toolMode == ToolMode.ERASER_PRECISION) {
             handleEraser(event, pageX, pageY, precision = toolMode == ToolMode.ERASER_PRECISION)
             return true
         }
 
-        // Lasso selection
         if (toolMode == ToolMode.LASSO) {
             handleLasso(event, pageX, pageY)
             return true
         }
 
-        // Standard Pen / Highlighter / Laser drawing
         handlePenDrawing(event, activeIdx)
         return true
     }
@@ -590,9 +702,7 @@ class InkCanvasView(context: Context) : View(context) {
             }
             action == MotionEvent.ACTION_MOVE -> {
                 if (!isDrawing) return
-                for (h in 0 until event.historySize) {
-                    appendMotionPoint(event, pointerIndex, h)
-                }
+                for (h in 0 until event.historySize) appendMotionPoint(event, pointerIndex, h)
                 appendMotionPoint(event, pointerIndex, -1)
                 lastMoveTime = System.currentTimeMillis()
                 handler.removeCallbacks(shapeCheckRunnable)
@@ -629,7 +739,7 @@ class InkCanvasView(context: Context) : View(context) {
     private fun appendMotionPoint(event: MotionEvent, pointerIndex: Int, historyIdx: Int) {
         val rawX = if (historyIdx >= 0) event.getHistoricalX(pointerIndex, historyIdx) else event.getX(pointerIndex)
         val rawY = if (historyIdx >= 0) event.getHistoricalY(pointerIndex, historyIdx) else event.getY(pointerIndex)
-        val rawPressure = if (historyIdx >= 0) event.getHistoricalPressure(pointerIndex, historyIdx) else event.getPressure(pointerIndex)
+        val rawPressure = if (historyIdx >= 0) event.getHistoricalPressure(pointerIndex, historyIdx) else event.pressure
         val tilt = if (historyIdx >= 0) {
             event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, pointerIndex, historyIdx)
         } else {
@@ -645,7 +755,7 @@ class InkCanvasView(context: Context) : View(context) {
         }
 
         val last = activePoints.lastOrNull()
-        if (last != null && hypot(px - last.x, py - last.y) < 1.5f) return
+        if (last != null && hypot(px - last.x, py - last.y) < 0.6f) return
 
         val normalizedPressure = if (rawPressure <= 0f) 0.5f else rawPressure.coerceIn(0.05f, 1.0f)
         activePoints.add(StrokePoint(px, py, normalizedPressure, tilt, ts))
@@ -666,9 +776,7 @@ class InkCanvasView(context: Context) : View(context) {
                     onStrokesReplaced?.invoke(updated)
                 }
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                isErasing = false
-            }
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> isErasing = false
         }
     }
 

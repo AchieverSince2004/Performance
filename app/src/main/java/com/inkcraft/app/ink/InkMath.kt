@@ -14,32 +14,53 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * Pure Kotlin ink geometry, pressure-width mapping, hit-testing,
- * lasso selection, and hold-to-snap shape recognition.
+ * Pure Kotlin ink geometry, pressure+velocity width mapping, hit-testing,
+ * lasso selection/transform, and hold-to-snap shape recognition.
  */
 object InkMath {
 
-    /** Standard logical page dimensions (A4-like portrait aspect at 1200x1680). */
     const val PAGE_WIDTH = 1200f
     const val PAGE_HEIGHT = 1680f
 
-    /**
-     * Computes the rendered stroke width at a given point using stylus pressure,
-     * tilt angle, and pen style dynamics.
-     */
-    fun computeWidth(point: StrokePoint, baseWidth: Float, style: PenStyle): Float {
+    fun computeWidth(
+        point: StrokePoint,
+        baseWidth: Float,
+        style: PenStyle,
+        prevPoint: StrokePoint? = null
+    ): Float {
         val clampedPressure = point.pressure.coerceIn(0.05f, 1.0f)
-        // Smooth ease-in-out pressure response
+        // Subtle velocity thinning for organic fountain & brush feel
+        var velocityFactor = 1f
+        if (prevPoint != null && point.timestamp > prevPoint.timestamp) {
+            val dt = (point.timestamp - prevPoint.timestamp).coerceAtLeast(1L).toFloat()
+            val dist = hypot(point.x - prevPoint.x, point.y - prevPoint.y)
+            val speed = dist / dt // px per ms
+            velocityFactor = (1.08f - speed * 0.14f).coerceIn(0.72f, 1.08f)
+        }
+
         val shaped = when (style) {
             PenStyle.FOUNTAIN -> {
                 val p = clampedPressure * clampedPressure * (3f - 2f * clampedPressure)
-                val tiltBoost = 1f + (point.tilt.coerceIn(0f, 1.2f) * 0.25f)
-                lerp(style.minPressureScale, style.maxPressureScale, p) * tiltBoost
+                val tiltBoost = 1f + (point.tilt.coerceIn(0f, 1.2f) * 0.22f)
+                lerp(style.minPressureScale, style.maxPressureScale, p) * tiltBoost * velocityFactor
             }
             PenStyle.BRUSH -> {
                 val p = sqrt(clampedPressure)
-                lerp(style.minPressureScale, style.maxPressureScale, p)
+                lerp(style.minPressureScale, style.maxPressureScale, p) * velocityFactor
             }
+            PenStyle.CALLIGRAPHY -> {
+                val p = clampedPressure
+                val dirScale = if (prevPoint != null) {
+                    val dx = point.x - prevPoint.x
+                    val dy = point.y - prevPoint.y
+                    val len = hypot(dx, dy).coerceAtLeast(0.01f)
+                    // 45-degree chisel nib projection
+                    val nib = abs((dx / len) * 0.7071f - (dy / len) * 0.7071f)
+                    0.45f + 0.85f * nib
+                } else 1f
+                lerp(style.minPressureScale, style.maxPressureScale, p) * dirScale
+            }
+            PenStyle.PENCIL -> lerp(style.minPressureScale, style.maxPressureScale, clampedPressure)
             PenStyle.BALLPOINT -> lerp(style.minPressureScale, style.maxPressureScale, clampedPressure)
             PenStyle.FINELINER -> lerp(style.minPressureScale, style.maxPressureScale, clampedPressure)
             PenStyle.HIGHLIGHTER -> lerp(style.minPressureScale, style.maxPressureScale, clampedPressure)
@@ -50,9 +71,6 @@ object InkMath {
 
     private fun lerp(a: Float, b: Float, t: Float): Float = a + (b - a) * t
 
-    /**
-     * Distance from point (px, py) to segment (ax, ay)-(bx, by).
-     */
     fun pointToSegmentDistance(
         px: Float, py: Float,
         ax: Float, ay: Float,
@@ -68,9 +86,6 @@ object InkMath {
         return hypot(px - projX, py - projY)
     }
 
-    /**
-     * Returns true if any segment of [stroke] is within [radius] of (x, y).
-     */
     fun hitTestStroke(stroke: Stroke, x: Float, y: Float, radius: Float): Boolean {
         val pts = stroke.points
         if (pts.isEmpty()) return false
@@ -85,9 +100,6 @@ object InkMath {
         return false
     }
 
-    /**
-     * Splits a stroke where an eraser passes over it, returning 0, 1, or more remaining sub-strokes.
-     */
     fun splitStrokeByEraser(stroke: Stroke, eraseX: Float, eraseY: Float, radius: Float): List<Stroke> {
         val pts = stroke.points
         if (pts.isEmpty()) return emptyList()
@@ -100,31 +112,19 @@ object InkMath {
             if (dist > effectiveRadius) {
                 current.add(pt)
             } else {
-                if (current.size >= 2) {
-                    keptSegments.add(current)
-                }
+                if (current.size >= 2) keptSegments.add(current)
                 current = mutableListOf()
             }
         }
-        if (current.size >= 2) {
-            keptSegments.add(current)
-        }
+        if (current.size >= 2) keptSegments.add(current)
 
-        if (keptSegments.size == 1 && keptSegments[0].size == pts.size) {
-            return listOf(stroke)
-        }
+        if (keptSegments.size == 1 && keptSegments[0].size == pts.size) return listOf(stroke)
 
         return keptSegments.mapIndexed { idx, seg ->
-            stroke.copy(
-                id = if (idx == 0) stroke.id else "${stroke.id}_$idx",
-                points = seg
-            )
+            stroke.copy(id = if (idx == 0) stroke.id else "${stroke.id}_$idx", points = seg)
         }
     }
 
-    /**
-     * Point-in-polygon test (ray casting) for lasso selection.
-     */
     fun isPointInPolygon(x: Float, y: Float, polygon: List<StrokePoint>): Boolean {
         if (polygon.size < 3) return false
         var inside = false
@@ -142,31 +142,45 @@ object InkMath {
         return inside
     }
 
-    /**
-     * Returns true if at least 50% of the stroke's points fall inside the lasso polygon.
-     */
     fun isStrokeInLasso(stroke: Stroke, lasso: List<StrokePoint>): Boolean {
         if (stroke.points.isEmpty() || lasso.size < 3) return false
         val insideCount = stroke.points.count { isPointInPolygon(it.x, it.y, lasso) }
         return insideCount * 2 >= stroke.points.size
     }
 
-    /**
-     * Translates a stroke by (dx, dy).
-     */
     fun translateStroke(stroke: Stroke, dx: Float, dy: Float): Stroke {
+        return stroke.copy(points = stroke.points.map { it.copy(x = it.x + dx, y = it.y + dy) })
+    }
+
+    fun scaleStrokeAround(stroke: Stroke, cx: Float, cy: Float, factor: Float): Stroke {
         return stroke.copy(
-            points = stroke.points.map { it.copy(x = it.x + dx, y = it.y + dy) }
+            baseWidth = (stroke.baseWidth * factor).coerceIn(1.5f, 48f),
+            points = stroke.points.map {
+                it.copy(
+                    x = cx + (it.x - cx) * factor,
+                    y = cy + (it.y - cy) * factor
+                )
+            }
         )
     }
 
-    /**
-     * Recognizes common hand-drawn geometric shapes (Line, Circle/Ellipse, Rectangle, Triangle)
-     * when the user draws and holds the stylus still. Returns null if not a clear shape.
-     */
+    fun rotateStrokeAround(stroke: Stroke, cx: Float, cy: Float, angleRad: Float): Stroke {
+        val c = cos(angleRad)
+        val s = sin(angleRad)
+        return stroke.copy(
+            points = stroke.points.map {
+                val dx = it.x - cx
+                val dy = it.y - cy
+                it.copy(
+                    x = cx + dx * c - dy * s,
+                    y = cy + dx * s + dy * c
+                )
+            }
+        )
+    }
+
     fun recognizeShape(points: List<StrokePoint>): List<StrokePoint>? {
         if (points.size < 6) return null
-
         val first = points.first()
         val last = points.last()
         var minX = Float.MAX_VALUE
@@ -181,9 +195,7 @@ object InkMath {
             minY = min(minY, p.y)
             maxX = max(maxX, p.x)
             maxY = max(maxY, p.y)
-            if (i > 0) {
-                pathLen += hypot(p.x - points[i - 1].x, p.y - points[i - 1].y)
-            }
+            if (i > 0) pathLen += hypot(p.x - points[i - 1].x, p.y - points[i - 1].y)
         }
 
         val width = maxX - minX
@@ -193,16 +205,11 @@ object InkMath {
 
         val endToEnd = hypot(last.x - first.x, last.y - first.y)
 
-        // 1. Straight Line check: pathLen is close to endToEnd
         if (endToEnd > 25f && pathLen / endToEnd < 1.14f) {
             val avgPressure = points.map { it.pressure }.average().toFloat().coerceIn(0.35f, 0.9f)
-            return listOf(
-                first.copy(pressure = avgPressure),
-                last.copy(pressure = avgPressure)
-            )
+            return listOf(first.copy(pressure = avgPressure), last.copy(pressure = avgPressure))
         }
 
-        // Closed shape check: start and end are reasonably close relative to bounding diag
         val isClosed = endToEnd < max(48f, diag * 0.35f)
         if (!isClosed) return null
 
@@ -212,31 +219,24 @@ object InkMath {
         val ry = height / 2f
         val avgPressure = points.map { it.pressure }.average().toFloat().coerceIn(0.35f, 0.9f)
 
-        // 2. Circle / Ellipse check: normalized radial distance to ellipse boundary
         if (rx > 10f && ry > 10f) {
             val ellipseErrors = points.map { p ->
                 val nx = (p.x - cx) / rx
                 val ny = (p.y - cy) / ry
                 abs(hypot(nx, ny) - 1f)
             }
-            val meanErr = ellipseErrors.average()
-            if (meanErr < 0.17) {
+            if (ellipseErrors.average() < 0.17) {
                 val isCircle = abs(rx - ry) / max(rx, ry) < 0.22f
                 val finalRx = if (isCircle) (rx + ry) / 2f else rx
                 val finalRy = if (isCircle) (rx + ry) / 2f else ry
                 val steps = 48
                 return (0..steps).map { i ->
                     val angle = (2.0 * PI * i / steps).toFloat()
-                    StrokePoint(
-                        x = cx + finalRx * cos(angle),
-                        y = cy + finalRy * sin(angle),
-                        pressure = avgPressure
-                    )
+                    StrokePoint(cx + finalRx * cos(angle), cy + finalRy * sin(angle), avgPressure)
                 }
             }
         }
 
-        // 3. Rectangle check: points hug the bounding box edges
         if (width > 20f && height > 20f) {
             val edgeErrors = points.map { p ->
                 val dx = min(abs(p.x - minX), abs(p.x - maxX))
@@ -254,17 +254,13 @@ object InkMath {
             }
         }
 
-        // 4. Triangle check via RDP simplification
         val simplified = ramerDouglasPeucker(points, diag * 0.08f)
         if (simplified.size in 4..5) {
-            val p0 = simplified[0]
-            val p1 = simplified[1]
-            val p2 = simplified[2]
             return listOf(
-                p0.copy(pressure = avgPressure),
-                p1.copy(pressure = avgPressure),
-                p2.copy(pressure = avgPressure),
-                p0.copy(pressure = avgPressure)
+                simplified[0].copy(pressure = avgPressure),
+                simplified[1].copy(pressure = avgPressure),
+                simplified[2].copy(pressure = avgPressure),
+                simplified[0].copy(pressure = avgPressure)
             )
         }
 
@@ -293,9 +289,6 @@ object InkMath {
         }
     }
 
-    /**
-     * Snaps a point onto a ruler line segment if within [snapDistance].
-     */
     fun snapToRuler(
         x: Float, y: Float,
         rulerCx: Float, rulerCy: Float,

@@ -138,9 +138,10 @@ fun ShelfScreen(
                 Box(Modifier.size(12.dp).clip(CircleShape).background(Color(0xFF28C840)))
                 Spacer(Modifier.width(14.dp))
                 Text(
-                    "InkCraft",
+                    "Vellum",
                     fontWeight = FontWeight.SemiBold,
-                    fontSize = 15.sp,
+                    fontSize = 16.sp,
+                    letterSpacing = (-0.3).sp,
                     color = MaterialTheme.colorScheme.onSurface
                 )
             }
@@ -272,7 +273,7 @@ fun ShelfScreen(
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        "${filteredNotebooks.size} ${if (filteredNotebooks.size == 1) "notebook" else "notebooks"} • Apple-grade Stylus Studio",
+                        "${filteredNotebooks.size} ${if (filteredNotebooks.size == 1) "notebook" else "notebooks"} • Vellum Studio",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

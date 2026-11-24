@@ -57,15 +57,19 @@ import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.PictureAsPdf
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.RotateLeft
+import androidx.compose.material.icons.filled.RotateRight
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.StickyNote2
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SubdirectoryArrowLeft
+import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TouchApp
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -117,6 +121,7 @@ import com.inkcraft.app.model.PenPreset
 import com.inkcraft.app.model.PenStyle
 import com.inkcraft.app.model.StickyNote
 import com.inkcraft.app.model.Stroke
+import com.inkcraft.app.model.TextBox
 import com.inkcraft.app.model.ToolMode
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -189,9 +194,11 @@ fun EditorScreen(
     var undoStacks by remember(notebook.id) { mutableStateOf<Map<String, List<List<Stroke>>>>(emptyMap()) }
     var redoStacks by remember(notebook.id) { mutableStateOf<Map<String, List<List<Stroke>>>>(emptyMap()) }
 
-    // Lasso selection
+    // Lasso selection & overlays
     var selectedStrokeIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var editingStickyNote by remember { mutableStateOf<StickyNote?>(null) }
+    var editingTextBox by remember { mutableStateOf<TextBox?>(null) }
+    var currentZoomScale by remember { mutableFloatStateOf(1f) }
 
     // Pomodoro Focus Timer
     var focusRunning by remember { mutableStateOf(false) }
@@ -553,6 +560,18 @@ fun EditorScreen(
                                 mutateCurrentPage { it.copy(stickyNotes = it.stickyNotes + newNote) }
                                 editingStickyNote = newNote
                             }
+                            view.onStickyNoteMoved = { id, dx, dy ->
+                                mutateCurrentPage { p ->
+                                    p.copy(stickyNotes = p.stickyNotes.map { if (it.id == id) it.copy(x = it.x + dx, y = it.y + dy) else it })
+                                }
+                            }
+                            view.onTextBoxTapped = { tb -> editingTextBox = tb }
+                            view.onTextBoxAdded = { x, y ->
+                                val newTb = TextBox(x = x, y = y, text = "")
+                                mutateCurrentPage { it.copy(textBoxes = it.textBoxes + newTb) }
+                                editingTextBox = newTb
+                            }
+                            view.onViewportChanged = { scale, _, _ -> currentZoomScale = scale }
                             view.onLassoSelectionChanged = { ids -> selectedStrokeIds = ids }
                         },
                         modifier = Modifier.fillMaxSize()
@@ -648,26 +667,97 @@ fun EditorScreen(
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
                             ) {
-                                Text("${selectedStrokeIds.size} selected • Drag to move", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                                QUICK_COLORS.take(4).forEach { col ->
+                                Text("${selectedStrokeIds.size} selected", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                IconButton(onClick = { canvasViewRef?.scaleSelectedStrokes(0.88f) }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.ZoomOut, contentDescription = "Shrink", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(onClick = { canvasViewRef?.scaleSelectedStrokes(1.14f) }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.ZoomIn, contentDescription = "Enlarge", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(onClick = { canvasViewRef?.rotateSelectedStrokes(-15f) }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.RotateLeft, contentDescription = "Rotate Left", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(onClick = { canvasViewRef?.rotateSelectedStrokes(15f) }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.RotateRight, contentDescription = "Rotate Right", modifier = Modifier.size(16.dp))
+                                }
+                                IconButton(onClick = { canvasViewRef?.duplicateSelectedStrokes() }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate", modifier = Modifier.size(16.dp))
+                                }
+                                QUICK_COLORS.take(3).forEach { col ->
                                     Box(
                                         modifier = Modifier
-                                            .size(22.dp)
+                                            .size(20.dp)
                                             .clip(CircleShape)
                                             .background(Color(col))
                                             .border(1.dp, Color.Gray, CircleShape)
                                             .clickable { canvasViewRef?.recolorSelectedStrokes(col) }
                                     )
                                 }
-                                IconButton(onClick = { canvasViewRef?.deleteSelectedStrokes() }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
+                                IconButton(onClick = { canvasViewRef?.deleteSelectedStrokes() }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(16.dp))
                                 }
-                                IconButton(onClick = { canvasViewRef?.clearSelection() }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear")
+                                IconButton(onClick = { canvasViewRef?.clearSelection() }, modifier = Modifier.size(30.dp)) {
+                                    Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
                                 }
+                            }
+                        }
+                    }
+
+                    // Bottom-Right macOS Zoom & Page Navigation HUD
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 16.dp, bottom = if (showZoomBox) 264.dp else 16.dp)
+                            .shadow(8.dp, RoundedCornerShape(14.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(14.dp))
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            IconButton(
+                                onClick = { if (safePageIdx > 0) currentPageIdx = safePageIdx - 1 },
+                                enabled = safePageIdx > 0,
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Prev Page", modifier = Modifier.size(16.dp))
+                            }
+                            Text(
+                                "P.${safePageIdx + 1}/${notebook.pages.size}",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 4.dp)
+                            )
+                            IconButton(
+                                onClick = { if (safePageIdx < notebook.pages.lastIndex) currentPageIdx = safePageIdx + 1 },
+                                enabled = safePageIdx < notebook.pages.lastIndex,
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next Page", modifier = Modifier.size(16.dp))
+                            }
+
+                            Box(Modifier.width(1.dp).height(18.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)))
+
+                            IconButton(onClick = { canvasViewRef?.setFixedZoom(currentZoomScale - 0.15f) }, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Default.ZoomOut, contentDescription = "Zoom Out", modifier = Modifier.size(16.dp))
+                            }
+                            Text(
+                                "${(currentZoomScale * 100).toInt()}%",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .clickable { canvasViewRef?.fitPageToWidth() }
+                                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                            )
+                            IconButton(onClick = { canvasViewRef?.setFixedZoom(currentZoomScale + 0.15f) }, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Default.ZoomIn, contentDescription = "Zoom In", modifier = Modifier.size(16.dp))
                             }
                         }
                     }
@@ -903,6 +993,37 @@ fun EditorScreen(
         )
     }
 
+    editingTextBox?.let { tb ->
+        var text by remember(tb.id) { mutableStateOf(tb.text) }
+        AlertDialog(
+            onDismissRequest = { editingTextBox = null },
+            title = { Text("Text Box", fontWeight = FontWeight.SemiBold) },
+            text = {
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    label = { Text("Text") },
+                    minLines = 3,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    mutateCurrentPage { p ->
+                        p.copy(textBoxes = p.textBoxes.map { if (it.id == tb.id) it.copy(text = text) else it })
+                    }
+                    editingTextBox = null
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    mutateCurrentPage { p -> p.copy(textBoxes = p.textBoxes.filterNot { it.id == tb.id }) }
+                    editingTextBox = null
+                }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+            }
+        )
+    }
+
     if (showTemplateDialog) {
         AlertDialog(
             onDismissRequest = { showTemplateDialog = false },
@@ -1010,6 +1131,12 @@ private fun MacFloatingToolDock(
             ToolBtn(Icons.Default.Brush, "Brush", toolMode == ToolMode.PEN && penStyle == PenStyle.BRUSH) {
                 onSelectPenStyle(PenStyle.BRUSH)
             }
+            ToolBtn(Icons.Default.AutoFixHigh, "Calligraphy", toolMode == ToolMode.PEN && penStyle == PenStyle.CALLIGRAPHY) {
+                onSelectPenStyle(PenStyle.CALLIGRAPHY)
+            }
+            ToolBtn(Icons.Default.Edit, "Graphite Pencil", toolMode == ToolMode.PEN && penStyle == PenStyle.PENCIL) {
+                onSelectPenStyle(PenStyle.PENCIL)
+            }
             ToolBtn(Icons.Default.Highlight, "Highlighter", toolMode == ToolMode.PEN && penStyle == PenStyle.HIGHLIGHTER) {
                 onSelectPenStyle(PenStyle.HIGHLIGHTER)
             }
@@ -1041,6 +1168,9 @@ private fun MacFloatingToolDock(
             }
             ToolBtn(Icons.Default.Gesture, "Lasso", toolMode == ToolMode.LASSO) {
                 onSelectTool(ToolMode.LASSO)
+            }
+            ToolBtn(Icons.Default.TextFields, "Text Box", toolMode == ToolMode.TEXT_BOX) {
+                onSelectTool(ToolMode.TEXT_BOX)
             }
             ToolBtn(Icons.Default.StickyNote2, "Sticky Note", toolMode == ToolMode.STICKY_NOTE) {
                 onSelectTool(ToolMode.STICKY_NOTE)

@@ -1,13 +1,17 @@
 package com.inkcraft.app.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 
 /**
- * macOS / Apple Studio-inspired light color system:
- * Crisp neutral surfaces, 1dp hairline borders, and System Blue accents.
+ * macOS / Apple Studio-inspired color & typography system.
  */
 private val MacStudioColors = lightColorScheme(
     primary = Color(0xFF007AFF),
@@ -29,10 +33,47 @@ private val MacStudioColors = lightColorScheme(
     error = Color(0xFFFF3B30)
 )
 
+private val MacTypography = Typography(
+    headlineSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Bold,
+        fontSize = 22.sp,
+        letterSpacing = (-0.45).sp,
+        lineHeight = 28.sp
+    ),
+    titleMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 16.sp,
+        letterSpacing = (-0.25).sp,
+        lineHeight = 22.sp
+    ),
+    bodyMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.Normal,
+        fontSize = 14.sp,
+        letterSpacing = (-0.1).sp,
+        lineHeight = 20.sp
+    ),
+    labelMedium = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 12.sp,
+        letterSpacing = 0.2.sp
+    ),
+    labelSmall = TextStyle(
+        fontFamily = FontFamily.SansSerif,
+        fontWeight = FontWeight.SemiBold,
+        fontSize = 11.sp,
+        letterSpacing = 0.6.sp
+    )
+)
+
 @Composable
 fun InkCraftTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = MacStudioColors,
+        typography = MacTypography,
         content = content
     )
 }

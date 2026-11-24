@@ -3,10 +3,14 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
+    <!-- Deep Obsidian-Indigo macOS Squircle Backdrop -->
     <path
-        android:fillColor="#1A1B2E"
+        android:fillColor="#0F172A"
         android:pathData="M0,0h108v108h-108z" />
     <path
-        android:fillColor="#262947"
-        android:pathData="M0,0 L108,0 L108,54 Q54,68 0,54 Z" />
+        android:fillColor="#1E1B4B"
+        android:pathData="M0,0 L108,0 L108,68 Q54,96 0,68 Z" />
+    <path
+        android:fillColor="#312E81"
+        android:pathData="M0,0 L108,0 L108,36 Q54,54 0,36 Z" />
 </vector>

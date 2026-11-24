@@ -5,11 +5,13 @@ import java.util.UUID
 
 @Serializable
 enum class PenStyle(val displayName: String, val defaultWidth: Float, val minPressureScale: Float, val maxPressureScale: Float) {
-    FOUNTAIN("Fountain Pen", 5.5f, 0.35f, 1.85f),
-    BALLPOINT("Ballpoint", 4.0f, 0.75f, 1.20f),
-    FINELINER("Fineliner", 2.8f, 0.95f, 1.05f),
-    BRUSH("Brush Pen", 10.0f, 0.25f, 2.30f),
-    HIGHLIGHTER("Highlighter", 26.0f, 0.90f, 1.15f),
+    FOUNTAIN("Fountain Pen", 5.2f, 0.32f, 1.85f),
+    BALLPOINT("Ballpoint", 3.8f, 0.78f, 1.18f),
+    FINELINER("Fineliner", 2.6f, 0.96f, 1.04f),
+    BRUSH("Brush Pen", 9.5f, 0.22f, 2.35f),
+    CALLIGRAPHY("Calligraphy", 8.0f, 0.45f, 1.75f),
+    PENCIL("Graphite Pencil", 4.2f, 0.55f, 1.35f),
+    HIGHLIGHTER("Highlighter", 26.0f, 0.92f, 1.12f),
     LASER("Laser Pointer", 7.0f, 1.0f, 1.0f)
 }
 
@@ -18,6 +20,7 @@ enum class ToolMode {
     ERASER_STROKE,
     ERASER_PRECISION,
     LASSO,
+    TEXT_BOX,
     STICKY_NOTE,
     PAN_ONLY
 }
@@ -29,20 +32,28 @@ enum class PaperTemplate(val displayName: String) {
     RULED_NARROW("Ruled Narrow"),
     CORNELL("Cornell Notes"),
     DOT_GRID("Dot Grid"),
-    SQUARE_GRID("Square Grid"),
-    ISOMETRIC("Isometric Grid"),
+    SQUARE_GRID("Square Graph"),
+    ENGINEERING_GRID("Engineering"),
+    ISOMETRIC("Isometric"),
+    HEXAGONAL("Hex Chemistry"),
+    STORYBOARD("Storyboard"),
+    WIREFRAME("Tablet Wireframe"),
     MUSIC_STAFF("Music Staff"),
+    GUITAR_TAB("Guitar Tab"),
     DAILY_PLANNER("Daily Planner"),
-    WEEKLY_SCHEDULE("Weekly Schedule")
+    WEEKLY_SCHEDULE("Weekly Plan"),
+    MONTHLY_CALENDAR("Monthly Grid"),
+    HABIT_TRACKER("Habit Tracker"),
+    MEETING_MINUTES("Meeting Log")
 }
 
 @Serializable
 enum class PaperColor(val displayName: String, val bgArgb: Long, val lineArgb: Long, val isDark: Boolean) {
-    WHITE("Crisp White", 0xFFFFFFFF, 0xFFD0D7E2, false),
-    CREAM("Warm Cream", 0xFFFBF8F1, 0xFFE2D9C8, false),
+    WHITE("Crisp White", 0xFFFFFFFF, 0xFFD5DCE6, false),
+    CREAM("Warm Vellum", 0xFFFBF8F1, 0xFFE3DAC9, false),
     SEPIA("Soft Sepia", 0xFFF4ECD8, 0xFFD5C7A9, false),
-    DARK_SLATE("Dark Slate", 0xFF1E222A, 0xFF333A48, true),
-    MIDNIGHT("Midnight Ink", 0xFF111318, 0xFF282D3A, true)
+    DARK_SLATE("Dark Slate", 0xFF1C1F26, 0xFF313744, true),
+    MIDNIGHT("Midnight Ink", 0xFF101218, 0xFF262B38, true)
 }
 
 @Serializable
@@ -53,12 +64,12 @@ enum class CoverTheme(
     val spineArgb: Long,
     val textArgb: Long
 ) {
-    LEATHER_NAVY("Classic Navy", 0xFF1E293B, 0xFF3B82F6, 0xFF0F172A, 0xFFF8FAFC),
+    LEATHER_NAVY("Classic Navy", 0xFF1E293B, 0xFF38BDF8, 0xFF0F172A, 0xFFF8FAFC),
     LEATHER_BURGUNDY("Oxblood Leather", 0xFF581C2C, 0xFFF59E0B, 0xFF3B0D19, 0xFFFEF3C7),
     FOREST_GREEN("Botanical Sage", 0xFF1B4332, 0xFF52B788, 0xFF081C15, 0xFFECFDF5),
     SUNSET_GRADIENT("Amber Horizon", 0xFF9A3412, 0xFFFB923C, 0xFF7C2D12, 0xFFFFF7ED),
     BLUEPRINT("Architect Blueprint", 0xFF1D4ED8, 0xFF93C5FD, 0xFF1E3A8A, 0xFFEFF6FF),
-    MINIMAL_CREAM("Linen Cream", 0xFFE7E0D3, 0xFF78716C, 0xFFD6CEC0, 0xFF292524),
+    MINIMAL_CREAM("Linen Vellum", 0xFFE7E0D3, 0xFF78716C, 0xFFD6CEC0, 0xFF292524),
     CARBON_DARK("Carbon Studio", 0xFF18181B, 0xFFA855F7, 0xFF09090B, 0xFFFAFAFA),
     LAVENDER_MIST("Iris Mist", 0xFF4C1D95, 0xFFC4B5FD, 0xFF2E1065, 0xFFF5F3FF)
 }
@@ -95,6 +106,17 @@ data class StickyNote(
 )
 
 @Serializable
+data class TextBox(
+    val id: String = UUID.randomUUID().toString(),
+    val x: Float,
+    val y: Float,
+    val width: Float = 380f,
+    val text: String = "Tap to type...",
+    val fontSize: Float = 28f,
+    val colorArgb: Long = 0xFF1D1D1F
+)
+
+@Serializable
 data class CanvasImage(
     val id: String = UUID.randomUUID().toString(),
     val fileName: String,
@@ -112,6 +134,7 @@ data class NotePage(
     val paperColor: PaperColor = PaperColor.CREAM,
     val strokes: List<Stroke> = emptyList(),
     val stickyNotes: List<StickyNote> = emptyList(),
+    val textBoxes: List<TextBox> = emptyList(),
     val images: List<CanvasImage> = emptyList(),
     val pdfFileName: String? = null,
     val pdfPageIndex: Int? = null,
@@ -147,7 +170,7 @@ data class Notebook(
 data class Folder(
     val id: String = UUID.randomUUID().toString(),
     val name: String,
-    val colorArgb: Long = 0xFF3B82F6
+    val colorArgb: Long = 0xFF007AFF
 )
 
 @Serializable
@@ -167,11 +190,11 @@ data class InkWorkspace(
 ) {
     companion object {
         fun defaultPresets(): List<PenPreset> = listOf(
-            PenPreset("p1", "Ink Black", PenStyle.FOUNTAIN, 0xFF111827, 5.0f),
-            PenPreset("p2", "Royal Blue", PenStyle.FOUNTAIN, 0xFF2563EB, 5.0f),
-            PenPreset("p3", "Crimson", PenStyle.BALLPOINT, 0xFFDC2626, 4.0f),
-            PenPreset("p4", "Emerald", PenStyle.FINELINER, 0xFF059669, 3.0f),
-            PenPreset("p5", "Sun Highlight", PenStyle.HIGHLIGHTER, 0xFFFACC15, 28.0f)
+            PenPreset("p1", "Obsidian", PenStyle.FOUNTAIN, 0xFF1D1D1F, 5.2f),
+            PenPreset("p2", "Cobalt", PenStyle.FOUNTAIN, 0xFF007AFF, 5.2f),
+            PenPreset("p3", "Crimson", PenStyle.BALLPOINT, 0xFFFF3B30, 3.8f),
+            PenPreset("p4", "Graphite", PenStyle.PENCIL, 0xFF475569, 4.2f),
+            PenPreset("p5", "Sun Highlight", PenStyle.HIGHLIGHTER, 0xFFFFCC00, 26.0f)
         )
     }
 }
