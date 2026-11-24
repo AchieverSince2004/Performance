@@ -170,6 +170,8 @@ fun EditorScreen(
     var shapeRecognition by remember { mutableStateOf(true) }
     var showRuler by remember { mutableStateOf(false) }
     var showZoomBox by remember { mutableStateOf(false) }
+    var zoomBoxPageX by remember { mutableFloatStateOf(120f) }
+    var zoomBoxPageY by remember { mutableFloatStateOf(240f) }
     var showPageSidebar by remember { mutableStateOf(false) }
     var showPenPopover by remember { mutableStateOf(false) }
     var showTemplateDialog by remember { mutableStateOf(false) }
