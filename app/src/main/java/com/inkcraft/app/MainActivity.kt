@@ -17,6 +17,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
+import com.inkcraft.app.ai.InkAiEngine
 import com.inkcraft.app.audio.AudioMemoManager
 import com.inkcraft.app.data.NotebookRepository
 import com.inkcraft.app.export.PdfTools
@@ -38,11 +39,13 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var repository: NotebookRepository
     private lateinit var audioManager: AudioMemoManager
+    private lateinit var aiEngine: InkAiEngine
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         repository = NotebookRepository(this)
         audioManager = AudioMemoManager(this, repository.mediaDir)
+        aiEngine = InkAiEngine(this)
 
         setContent {
             InkCraftTheme {
@@ -201,6 +204,7 @@ class MainActivity : ComponentActivity() {
                         imageBitmaps = imageBitmaps,
                         isRecordingAudio = isRecordingAudio,
                         isPlayingAudio = isPlayingAudio,
+                        aiEngine = aiEngine,
                         onBack = {
                             audioManager.stopPlayback()
                             isPlayingAudio = false
@@ -263,5 +267,6 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         audioManager.release()
+        aiEngine.release()
     }
 }

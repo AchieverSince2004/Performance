@@ -63,7 +63,9 @@ class InkCanvasView(context: Context) : View(context) {
     var penColorArgb: Long = 0xFF111827
     var penWidth: Float = 5.0f
     var stylusOnlyMode: Boolean = true
+    var pageLocked: Boolean = false
     var shapeRecognitionEnabled: Boolean = true
+    private var lastStylusActivityMs: Long = 0L
     var showRuler: Boolean = false
         set(value) {
             field = value
@@ -252,7 +254,7 @@ class InkCanvasView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
-        canvas.drawColor(0xFFE5E7EB.toInt())
+        canvas.drawColor(0xFFE8E8ED.toInt())
 
         canvas.save()
         canvas.translate(panX, panY)
@@ -386,81 +388,140 @@ class InkCanvasView(context: Context) : View(context) {
         canvas.restore()
     }
 
-    override fun onTouchEvent(event: MotionEvent): Boolean {
-        scaleDetector.onTouchEvent(event)
+    override fun onGenericMotionEvent(event: MotionEvent): Boolean {
+        if (findStylusPointerIndex(event) >= 0) {
+            lastStylusActivityMs = System.currentTimeMillis()
+        }
+        return super.onGenericMotionEvent(event)
+    }
 
-        // Multi-touch finger pan/zoom
-        if (event.pointerCount >= 2) {
-            isDrawing = false
-            isErasing = false
-            val focusX = (0 until event.pointerCount).map { event.getX(it) }.average().toFloat()
-            val focusY = (0 until event.pointerCount).map { event.getY(it) }.average().toFloat()
-            when (event.actionMasked) {
-                MotionEvent.ACTION_POINTER_DOWN -> {
-                    isPanning = true
-                    prevFocusX = focusX
-                    prevFocusY = focusY
+    private fun findStylusPointerIndex(event: MotionEvent): Int {
+        for (i in 0 until event.pointerCount) {
+            val t = event.getToolType(i)
+            if (t == MotionEvent.TOOL_TYPE_STYLUS || t == MotionEvent.TOOL_TYPE_ERASER) {
+                return i
+            }
+        }
+        return -1
+    }
+
+    private fun isPalmOrRejectedTouch(event: MotionEvent): Boolean {
+        val now = System.currentTimeMillis()
+        if (now - lastStylusActivityMs < 550L) return true
+        for (i in 0 until event.pointerCount) {
+            val major = event.getTouchMajor(i)
+            if (major > 115f) return true
+        }
+        return false
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        val stylusIdx = findStylusPointerIndex(event)
+        val hasStylus = stylusIdx >= 0
+
+        if (hasStylus) {
+            lastStylusActivityMs = System.currentTimeMillis()
+            isPanning = false
+        } else {
+            // No stylus in this event: handle finger/palm rejection & deliberate 2-finger zoom/pan
+            if (pageLocked) {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    val (px, py) = screenToPage(event.x, event.y)
+                    val hitNote = page.stickyNotes.lastOrNull {
+                        px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height)
+                    }
+                    if (hitNote != null) onStickyNoteTapped?.invoke(hitNote)
                 }
-                MotionEvent.ACTION_MOVE -> {
-                    if (isPanning && !scaleDetector.isInProgress) {
-                        panX += focusX - prevFocusX
-                        panY += focusY - prevFocusY
-                        prevFocusX = focusX
-                        prevFocusY = focusY
-                        onViewportChanged?.invoke(zoomScale, panX, panY)
-                        invalidate()
+                return true
+            }
+
+            if (event.pointerCount >= 2) {
+                // Only allow 2-finger zoom/pan if no stylus was recently active and neither contact is a palm
+                if (!isPalmOrRejectedTouch(event) && toolMode != ToolMode.LASSO) {
+                    isDrawing = false
+                    isErasing = false
+                    scaleDetector.onTouchEvent(event)
+                    val focusX = (0 until event.pointerCount).map { event.getX(it) }.average().toFloat()
+                    val focusY = (0 until event.pointerCount).map { event.getY(it) }.average().toFloat()
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_POINTER_DOWN -> {
+                            isPanning = true
+                            prevFocusX = focusX
+                            prevFocusY = focusY
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (isPanning && !scaleDetector.isInProgress) {
+                                panX += focusX - prevFocusX
+                                panY += focusY - prevFocusY
+                                prevFocusX = focusX
+                                prevFocusY = focusY
+                                onViewportChanged?.invoke(zoomScale, panX, panY)
+                                invalidate()
+                            }
+                        }
+                        MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            isPanning = false
+                        }
                     }
                 }
-                MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_UP -> {
-                    isPanning = false
-                }
+                return true
             }
-            return true
-        }
 
-        val toolType = event.getToolType(0)
-        val isStylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
-        val isStylusEraser = toolType == MotionEvent.TOOL_TYPE_ERASER ||
-            (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
-
-        // Single-finger pan when Stylus-Only mode is enabled or PAN_ONLY tool is active
-        if ((stylusOnlyMode && !isStylus) || toolMode == ToolMode.PAN_ONLY) {
-            when (event.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    // Still allow tapping sticky notes with finger
+            // Single-finger touch when Stylus-Only mode is enabled: NEVER pan the page!
+            // This prevents resting or sliding your palm from moving the canvas.
+            if (stylusOnlyMode) {
+                if (event.actionMasked == MotionEvent.ACTION_DOWN && !isPalmOrRejectedTouch(event)) {
                     val (px, py) = screenToPage(event.x, event.y)
                     val hitNote = page.stickyNotes.lastOrNull {
                         px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height)
                     }
                     if (hitNote != null) {
                         onStickyNoteTapped?.invoke(hitNote)
-                        return true
                     }
-                    isPanning = true
-                    prevFocusX = event.x
-                    prevFocusY = event.y
                 }
-                MotionEvent.ACTION_MOVE -> {
-                    if (isPanning) {
-                        panX += event.x - prevFocusX
-                        panY += event.y - prevFocusY
+                isPanning = false
+                return true
+            }
+
+            // Explicit PAN_ONLY mode with single finger
+            if (toolMode == ToolMode.PAN_ONLY) {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        isPanning = true
                         prevFocusX = event.x
                         prevFocusY = event.y
-                        onViewportChanged?.invoke(zoomScale, panX, panY)
-                        invalidate()
                     }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (isPanning) {
+                            panX += event.x - prevFocusX
+                            panY += event.y - prevFocusY
+                            prevFocusX = event.x
+                            prevFocusY = event.y
+                            onViewportChanged?.invoke(zoomScale, panX, panY)
+                            invalidate()
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> isPanning = false
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    isPanning = false
-                }
+                return true
             }
+        }
+
+        val activeIdx = if (stylusIdx >= 0) stylusIdx else 0
+        val rawX = event.getX(activeIdx)
+        val rawY = event.getY(activeIdx)
+        val toolType = event.getToolType(activeIdx)
+        val isStylusEraser = toolType == MotionEvent.TOOL_TYPE_ERASER ||
+            (event.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY) != 0
+
+        if (toolMode == ToolMode.PAN_ONLY && !isStylusEraser) {
             return true
         }
 
-        val (pageX, pageY) = screenToPage(event.x, event.y)
+        val (pageX, pageY) = screenToPage(rawX, rawY)
 
         // Dragging ruler if touched near its center body
-        if (showRuler && event.actionMasked == MotionEvent.ACTION_DOWN) {
+        if (showRuler && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val distToRuler = hypot(pageX - rulerCx, pageY - rulerCy)
             if (distToRuler < 70f) {
                 isDraggingRuler = true
@@ -478,13 +539,13 @@ class InkCanvasView(context: Context) : View(context) {
                     lastDragY = pageY
                     invalidate()
                 }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> isDraggingRuler = false
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_POINTER_UP, MotionEvent.ACTION_CANCEL -> isDraggingRuler = false
             }
             return true
         }
 
         // Sticky note placement or tap
-        if (toolMode == ToolMode.STICKY_NOTE && event.actionMasked == MotionEvent.ACTION_DOWN) {
+        if (toolMode == ToolMode.STICKY_NOTE && (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_POINTER_DOWN)) {
             val hitNote = page.stickyNotes.lastOrNull {
                 pageX in it.x..(it.x + it.width) && pageY in it.y..(it.y + it.height)
             }
@@ -509,34 +570,37 @@ class InkCanvasView(context: Context) : View(context) {
         }
 
         // Standard Pen / Highlighter / Laser drawing
-        handlePenDrawing(event)
+        handlePenDrawing(event, activeIdx)
         return true
     }
 
-    private fun handlePenDrawing(event: MotionEvent) {
-        when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
+    private fun handlePenDrawing(event: MotionEvent, pointerIndex: Int) {
+        val action = event.actionMasked
+        val actionIdx = event.actionIndex
+        when {
+            action == MotionEvent.ACTION_DOWN || (action == MotionEvent.ACTION_POINTER_DOWN && actionIdx == pointerIndex) -> {
                 activePoints.clear()
                 shapeSnappedForCurrentStroke = false
                 isDrawing = true
-                appendMotionPoint(event, -1)
+                appendMotionPoint(event, pointerIndex, -1)
                 lastMoveTime = System.currentTimeMillis()
                 handler.removeCallbacks(shapeCheckRunnable)
                 handler.postDelayed(shapeCheckRunnable, 450L)
                 invalidate()
             }
-            MotionEvent.ACTION_MOVE -> {
+            action == MotionEvent.ACTION_MOVE -> {
                 if (!isDrawing) return
                 for (h in 0 until event.historySize) {
-                    appendMotionPoint(event, h)
+                    appendMotionPoint(event, pointerIndex, h)
                 }
-                appendMotionPoint(event, -1)
+                appendMotionPoint(event, pointerIndex, -1)
                 lastMoveTime = System.currentTimeMillis()
                 handler.removeCallbacks(shapeCheckRunnable)
                 handler.postDelayed(shapeCheckRunnable, 450L)
                 invalidate()
             }
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+            action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL ||
+                (action == MotionEvent.ACTION_POINTER_UP && actionIdx == pointerIndex) -> {
                 handler.removeCallbacks(shapeCheckRunnable)
                 if (!isDrawing) return
                 isDrawing = false
@@ -562,14 +626,14 @@ class InkCanvasView(context: Context) : View(context) {
         }
     }
 
-    private fun appendMotionPoint(event: MotionEvent, historyIdx: Int) {
-        val rawX = if (historyIdx >= 0) event.getHistoricalX(historyIdx) else event.x
-        val rawY = if (historyIdx >= 0) event.getHistoricalY(historyIdx) else event.y
-        val rawPressure = if (historyIdx >= 0) event.getHistoricalPressure(historyIdx) else event.pressure
+    private fun appendMotionPoint(event: MotionEvent, pointerIndex: Int, historyIdx: Int) {
+        val rawX = if (historyIdx >= 0) event.getHistoricalX(pointerIndex, historyIdx) else event.getX(pointerIndex)
+        val rawY = if (historyIdx >= 0) event.getHistoricalY(pointerIndex, historyIdx) else event.getY(pointerIndex)
+        val rawPressure = if (historyIdx >= 0) event.getHistoricalPressure(pointerIndex, historyIdx) else event.getPressure(pointerIndex)
         val tilt = if (historyIdx >= 0) {
-            event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, historyIdx)
+            event.getHistoricalAxisValue(MotionEvent.AXIS_TILT, pointerIndex, historyIdx)
         } else {
-            event.getAxisValue(MotionEvent.AXIS_TILT)
+            event.getAxisValue(MotionEvent.AXIS_TILT, pointerIndex)
         }
         val ts = if (historyIdx >= 0) event.getHistoricalEventTime(historyIdx) else event.eventTime
 

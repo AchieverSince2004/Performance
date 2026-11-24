@@ -47,21 +47,20 @@ jobs:
           fi
           mkdir -p dist
           "$APKSIGNER" sign --ks "$KEYSTORE" --ks-pass pass:inkcraft123 \
-            --key-pass pass:inkcraft123 --out dist/InkCraft-v1.0.0.apk "$RAW_APK"
+            --key-pass pass:inkcraft123 --out dist/InkCraft-v2.0.0.apk "$RAW_APK"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v1.0.0' }}
-          name: InkCraft Tablet Studio v1.0.0
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'v2.0.0' }}
+          name: InkCraft Studio v2.0.0 (macOS Aesthetic + On-Device ML)
           body: |
-            ### InkCraft — Tablet Stylus Note-Taking Studio
-            Download `InkCraft-v1.0.0.apk` directly on your Android tablet and tap to install!
+            ### InkCraft Studio v2.0.0
+            Download `InkCraft-v2.0.0.apk` directly on your Android tablet and tap to install!
 
-            **Highlights:**
-            - True stylus pressure & tilt ink engine (Fountain, Ballpoint, Fineliner, Brush, Highlighter, Laser Pointer)
-            - Stylus-only palm rejection + 2-finger pinch zoom & pan + side-button / flip-eraser support
-            - Hold-to-snap geometric shapes, Straightedge Ruler overlay, and Noteshelf-style Zoom Box
-            - 10 Paper Templates (Cornell, Ruled, Dot Grid, Isometric, Music Staff, Daily/Weekly Planners) & 5 Paper Colors
-            - PDF Import & Annotation, Image insertion, Sticky Notes, Audio Memos, Pomodoro Timer & Multi-page PDF Export
-          files: dist/InkCraft-v1.0.0.apk
+            **What's New in v2.0.0:**
+            - **macOS Studio Aesthetics**: Frosted-glass floating dock, unified titlebar, Apple-inspired neutral palette, and crisp hairline borders.
+            - **Pro Palm Rejection**: Ignores resting palms & hover-cooldowns so your page never jumps while writing with your hand on the screen, plus a 1-tap Page Lock.
+            - **On-Device ML Handwriting-to-Text**: Powered by Google ML Kit Digital Ink Recognition — convert handwritten pages into clean digital text offline.
+            - **AI Voice Read-Aloud & Smart Summary**: Listen to your handwritten notes spoken aloud via TTS and extract key bullets/action items.
+          files: dist/InkCraft-v2.0.0.apk

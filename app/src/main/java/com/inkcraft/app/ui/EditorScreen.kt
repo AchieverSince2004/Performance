@@ -22,14 +22,17 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Redo
 import androidx.compose.material.icons.automirrored.filled.Undo
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.AutoFixHigh
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
@@ -46,8 +49,10 @@ import androidx.compose.material.icons.filled.Gesture
 import androidx.compose.material.icons.filled.Highlight
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material.icons.filled.LockOpen
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.MoreHoriz
 import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.PanTool
 import androidx.compose.material.icons.filled.PictureAsPdf
@@ -59,23 +64,25 @@ import androidx.compose.material.icons.filled.Straighten
 import androidx.compose.material.icons.filled.SubdirectoryArrowLeft
 import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material.icons.filled.TouchApp
+import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -84,16 +91,21 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.inkcraft.app.ai.InkAiEngine
 import com.inkcraft.app.ink.InkCanvasView
 import com.inkcraft.app.ink.InkMath
 import com.inkcraft.app.model.AudioMemo
@@ -107,22 +119,22 @@ import com.inkcraft.app.model.StickyNote
 import com.inkcraft.app.model.Stroke
 import com.inkcraft.app.model.ToolMode
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 private val QUICK_COLORS = listOf(
-    0xFF111827, // Ink Black
-    0xFF2563EB, // Royal Blue
-    0xFFDC2626, // Crimson
-    0xFF059669, // Emerald
-    0xFF7C3AED, // Violet
-    0xFFD97706, // Amber
-    0xFFEC4899, // Rose
-    0xFFFFFFFF, // Pure White (for dark paper)
-    0xFFFACC15  // Highlighter Yellow
+    0xFF1D1D1F, // Apple Charcoal
+    0xFF007AFF, // macOS Blue
+    0xFFFF3B30, // macOS Red
+    0xFF34C759, // macOS Green
+    0xFF5856D6, // macOS Indigo
+    0xFFFF9500, // macOS Amber
+    0xFFAF52DE, // macOS Purple
+    0xFFFFFFFF, // Pure White
+    0xFFFFCC00  // Highlighter Yellow
 )
 
 enum class ToolbarDock { TOP, LEFT, RIGHT }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EditorScreen(
     notebook: Notebook,
@@ -131,6 +143,7 @@ fun EditorScreen(
     imageBitmaps: Map<String, Bitmap>,
     isRecordingAudio: Boolean,
     isPlayingAudio: Boolean,
+    aiEngine: InkAiEngine,
     onBack: () -> Unit,
     onUpdateNotebook: (Notebook) -> Unit,
     onExportPdf: () -> Unit,
@@ -140,6 +153,9 @@ fun EditorScreen(
     onPlayAudio: (AudioMemo) -> Unit,
     onStopAudio: () -> Unit
 ) {
+    val scope = rememberCoroutineScope()
+    val clipboard = LocalClipboardManager.current
+
     var currentPageIdx by remember(notebook.id) { mutableIntStateOf(0) }
     val safePageIdx = currentPageIdx.coerceIn(0, (notebook.pages.size - 1).coerceAtLeast(0))
     val currentPage = notebook.pages.getOrNull(safePageIdx) ?: NotePage()
@@ -147,9 +163,10 @@ fun EditorScreen(
     // Tool states
     var toolMode by remember { mutableStateOf(ToolMode.PEN) }
     var penStyle by remember { mutableStateOf(PenStyle.FOUNTAIN) }
-    var penColorArgb by remember { mutableLongStateOf(0xFF111827) }
+    var penColorArgb by remember { mutableLongStateOf(0xFF1D1D1F) }
     var penWidth by remember { mutableFloatStateOf(5.0f) }
     var stylusOnlyMode by remember { mutableStateOf(true) }
+    var pageLocked by remember { mutableStateOf(false) }
     var shapeRecognition by remember { mutableStateOf(true) }
     var showRuler by remember { mutableStateOf(false) }
     var showZoomBox by remember { mutableStateOf(false) }
@@ -158,14 +175,20 @@ fun EditorScreen(
     var showTemplateDialog by remember { mutableStateOf(false) }
     var toolbarDock by remember { mutableStateOf(ToolbarDock.TOP) }
 
+    // AI Studio Modal state
+    var showAiStudio by remember { mutableStateOf(false) }
+    var aiLoading by remember { mutableStateOf(false) }
+    var aiRecognizedText by remember { mutableStateOf("") }
+    var aiError by remember { mutableStateOf<String?>(null) }
+    var aiSpeaking by remember { mutableStateOf(false) }
+    var aiSpeechRate by remember { mutableFloatStateOf(1.0f) }
+
     // Undo / Redo stacks per page
     var undoStacks by remember(notebook.id) { mutableStateOf<Map<String, List<List<Stroke>>>>(emptyMap()) }
     var redoStacks by remember(notebook.id) { mutableStateOf<Map<String, List<List<Stroke>>>>(emptyMap()) }
 
     // Lasso selection
     var selectedStrokeIds by remember { mutableStateOf<Set<String>>(emptySet()) }
-
-    // Sticky note editing
     var editingStickyNote by remember { mutableStateOf<StickyNote?>(null) }
 
     // Pomodoro Focus Timer
@@ -179,12 +202,7 @@ fun EditorScreen(
         if (focusSecondsLeft == 0) focusRunning = false
     }
 
-    // Canvas reference for imperative actions (fit, zoom box, lasso delete/recolor)
     var canvasViewRef by remember { mutableStateOf<InkCanvasView?>(null) }
-    var zoomBoxViewRef by remember { mutableStateOf<InkCanvasView?>(null) }
-    var zoomBoxPageX by remember { mutableFloatStateOf(120f) }
-    var zoomBoxPageY by remember { mutableFloatStateOf(240f) }
-
     var moreMenuExpanded by remember { mutableStateOf(false) }
 
     fun mutateCurrentPage(transform: (NotePage) -> NotePage) {
@@ -225,117 +243,182 @@ fun EditorScreen(
         mutateCurrentPage { it.copy(strokes = restored) }
     }
 
+    fun runAiRecognition() {
+        showAiStudio = true
+        aiLoading = true
+        aiError = null
+        scope.launch {
+            val res = aiEngine.recognizeHandwriting(currentPage.strokes)
+            aiLoading = false
+            res.onSuccess { text ->
+                aiRecognizedText = text
+            }.onFailure { err ->
+                aiError = err.message ?: "Handwriting recognition failed"
+            }
+        }
+    }
+
     Scaffold(
         topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back to Shelf")
+            // macOS Unified Studio Titlebar
+            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface.copy(alpha = 0.96f))) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", modifier = Modifier.size(20.dp))
                     }
-                },
-                title = {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(notebook.title, fontWeight = FontWeight.Bold, maxLines = 1)
-                        Spacer(Modifier.width(12.dp))
-                        Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text(
-                                "Page ${safePageIdx + 1} / ${notebook.pages.size}",
-                                fontSize = 12.sp,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                            )
+
+                    Spacer(Modifier.width(6.dp))
+                    Text(notebook.title, fontWeight = FontWeight.SemiBold, fontSize = 15.sp, maxLines = 1)
+                    Spacer(Modifier.width(10.dp))
+
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp)
+                    ) {
+                        Text(
+                            "${safePageIdx + 1} / ${notebook.pages.size}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    // Compact Undo / Redo Pill
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier.padding(end = 6.dp)
+                    ) {
+                        Row {
+                            IconButton(
+                                onClick = { undo() },
+                                enabled = undoStacks[currentPage.id]?.isNotEmpty() == true,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo", modifier = Modifier.size(17.dp))
+                            }
+                            IconButton(
+                                onClick = { redo() },
+                                enabled = redoStacks[currentPage.id]?.isNotEmpty() == true,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo", modifier = Modifier.size(17.dp))
+                            }
                         }
                     }
-                },
-                actions = {
-                    // Undo / Redo
-                    IconButton(onClick = { undo() }, enabled = undoStacks[currentPage.id]?.isNotEmpty() == true) {
-                        Icon(Icons.AutoMirrored.Filled.Undo, contentDescription = "Undo")
-                    }
-                    IconButton(onClick = { redo() }, enabled = redoStacks[currentPage.id]?.isNotEmpty() == true) {
-                        Icon(Icons.AutoMirrored.Filled.Redo, contentDescription = "Redo")
-                    }
 
-                    // Stylus-Only Palm Rejection Toggle
-                    FilterChip(
+                    // Stylus-Only Palm Rejection Pill
+                    MacTitlebarPill(
                         selected = stylusOnlyMode,
-                        onClick = { stylusOnlyMode = !stylusOnlyMode },
-                        label = { Text(if (stylusOnlyMode) "Stylus Only" else "Touch + Pen", fontSize = 12.sp) },
-                        leadingIcon = { Icon(Icons.Default.TouchApp, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
+                        icon = Icons.Default.TouchApp,
+                        label = if (stylusOnlyMode) "Palm Safe" else "Touch+Pen",
+                        onClick = { stylusOnlyMode = !stylusOnlyMode }
                     )
+                    Spacer(Modifier.width(4.dp))
 
-                    // Shape Snap Toggle
-                    FilterChip(
+                    // Lock Page Position Pill (zero accidental pan!)
+                    MacTitlebarPill(
+                        selected = pageLocked,
+                        icon = if (pageLocked) Icons.Default.Lock else Icons.Default.LockOpen,
+                        label = if (pageLocked) "Locked" else "Pan Free",
+                        onClick = { pageLocked = !pageLocked }
+                    )
+                    Spacer(Modifier.width(4.dp))
+
+                    // Shape Snap Pill
+                    MacTitlebarPill(
                         selected = shapeRecognition,
-                        onClick = { shapeRecognition = !shapeRecognition },
-                        label = { Text("Shapes", fontSize = 12.sp) },
-                        leadingIcon = { Icon(Icons.Default.AutoFixHigh, contentDescription = null, modifier = Modifier.size(16.dp)) },
-                        modifier = Modifier.padding(horizontal = 4.dp)
+                        icon = Icons.Default.AutoFixHigh,
+                        label = "Shapes",
+                        onClick = { shapeRecognition = !shapeRecognition }
                     )
+                    Spacer(Modifier.width(6.dp))
 
-                    // Ruler Toggle
-                    IconButton(onClick = { showRuler = !showRuler }) {
+                    // AI Studio Button (ML Kit Handwriting -> Text + Voice)
+                    Surface(
+                        color = MaterialTheme.colorScheme.primary,
+                        shape = RoundedCornerShape(10.dp),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(10.dp))
+                            .clickable { runAiRecognition() }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = "AI Studio", tint = Color.White, modifier = Modifier.size(15.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("AI Studio", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+
+                    Spacer(Modifier.width(4.dp))
+
+                    IconButton(onClick = { showRuler = !showRuler }, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Default.Straighten,
                             contentDescription = "Ruler",
-                            tint = if (showRuler) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            tint = if (showRuler) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
-
-                    // Zoom Box Toggle
-                    IconButton(onClick = { showZoomBox = !showZoomBox }) {
+                    IconButton(onClick = { showZoomBox = !showZoomBox }, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Default.ZoomIn,
                             contentDescription = "Zoom Box",
-                            tint = if (showZoomBox) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            tint = if (showZoomBox) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
-
-                    // Audio Recording
-                    IconButton(onClick = onToggleRecordAudio) {
+                    IconButton(onClick = onToggleRecordAudio, modifier = Modifier.size(34.dp)) {
                         Icon(
                             if (isRecordingAudio) Icons.Default.Stop else Icons.Default.Mic,
                             contentDescription = "Record Audio",
-                            tint = if (isRecordingAudio) Color(0xFFDC2626) else MaterialTheme.colorScheme.onSurface
+                            tint = if (isRecordingAudio) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
-                    // Pomodoro Focus Timer Pill
+                    // Pomodoro Timer Pill
                     Surface(
                         color = if (focusRunning) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
-                            .padding(horizontal = 4.dp)
+                            .padding(horizontal = 3.dp)
+                            .clip(RoundedCornerShape(10.dp))
                             .clickable { focusRunning = !focusRunning }
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp)
                         ) {
-                            Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Default.Timer, contentDescription = null, modifier = Modifier.size(14.dp))
                             Spacer(Modifier.width(4.dp))
-                            val mins = focusSecondsLeft / 60
-                            val secs = focusSecondsLeft % 60
-                            Text("%02d:%02d".format(mins, secs), fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                            Text("%02d:%02d".format(focusSecondsLeft / 60, focusSecondsLeft % 60), fontSize = 11.sp, fontWeight = FontWeight.Medium)
                         }
                     }
 
-                    // Pages Sidebar
-                    IconButton(onClick = { showPageSidebar = !showPageSidebar }) {
+                    IconButton(onClick = { showPageSidebar = !showPageSidebar }, modifier = Modifier.size(34.dp)) {
                         Icon(
                             Icons.Default.Layers,
                             contentDescription = "Pages",
-                            tint = if (showPageSidebar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface
+                            tint = if (showPageSidebar) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
 
-                    // More Menu
                     Box {
-                        IconButton(onClick = { moreMenuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "More")
+                        IconButton(onClick = { moreMenuExpanded = true }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.MoreHoriz, contentDescription = "More", modifier = Modifier.size(18.dp))
                         }
                         DropdownMenu(expanded = moreMenuExpanded, onDismissRequest = { moreMenuExpanded = false }) {
                             DropdownMenuItem(
@@ -360,12 +443,13 @@ fun EditorScreen(
                             )
                             DropdownMenuItem(
                                 text = {
-                                    val nextDock = when (toolbarDock) {
-                                        ToolbarDock.TOP -> "Dock Toolbar Left"
-                                        ToolbarDock.LEFT -> "Dock Toolbar Right"
-                                        ToolbarDock.RIGHT -> "Dock Toolbar Top"
-                                    }
-                                    Text(nextDock)
+                                    Text(
+                                        when (toolbarDock) {
+                                            ToolbarDock.TOP -> "Dock Toolbar Left"
+                                            ToolbarDock.LEFT -> "Dock Toolbar Right"
+                                            ToolbarDock.RIGHT -> "Dock Toolbar Top"
+                                        }
+                                    )
                                 },
                                 onClick = {
                                     moreMenuExpanded = false
@@ -384,7 +468,8 @@ fun EditorScreen(
                         }
                     }
                 }
-            )
+                HorizontalDivider(thickness = 1.dp, color = MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
+            }
         }
     ) { padding ->
         Box(
@@ -393,7 +478,6 @@ fun EditorScreen(
                 .padding(padding)
         ) {
             Row(modifier = Modifier.fillMaxSize()) {
-                // Optional Left Page Sidebar
                 AnimatedVisibility(visible = showPageSidebar) {
                     PageThumbnailsSidebar(
                         pages = notebook.pages,
@@ -436,18 +520,13 @@ fun EditorScreen(
                     )
                 }
 
-                // Main Canvas Area
                 Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                     val pdfKey = if (currentPage.pdfFileName != null && currentPage.pdfPageIndex != null) {
                         "${currentPage.pdfFileName}:${currentPage.pdfPageIndex}"
                     } else null
 
                     AndroidView(
-                        factory = { ctx ->
-                            InkCanvasView(ctx).also { view ->
-                                canvasViewRef = view
-                            }
-                        },
+                        factory = { ctx -> InkCanvasView(ctx).also { canvasViewRef = it } },
                         update = { view ->
                             view.page = currentPage
                             view.pdfBackgroundBitmap = pdfKey?.let { pdfPageBitmaps[it] }
@@ -457,6 +536,7 @@ fun EditorScreen(
                             view.penColorArgb = penColorArgb
                             view.penWidth = penWidth
                             view.stylusOnlyMode = stylusOnlyMode
+                            view.pageLocked = pageLocked
                             view.shapeRecognitionEnabled = shapeRecognition
                             view.showRuler = showRuler
                             view.onStrokeCommitted = { stroke ->
@@ -465,29 +545,24 @@ fun EditorScreen(
                             view.onStrokesReplaced = { newStrokes ->
                                 pushUndoAndReplaceStrokes(newStrokes)
                             }
-                            view.onStickyNoteTapped = { note ->
-                                editingStickyNote = note
-                            }
+                            view.onStickyNoteTapped = { note -> editingStickyNote = note }
                             view.onStickyNoteAdded = { x, y ->
                                 val newNote = StickyNote(x = x - 120f, y = y - 100f)
                                 mutateCurrentPage { it.copy(stickyNotes = it.stickyNotes + newNote) }
                                 editingStickyNote = newNote
                             }
-                            view.onLassoSelectionChanged = { ids ->
-                                selectedStrokeIds = ids
-                            }
+                            view.onLassoSelectionChanged = { ids -> selectedStrokeIds = ids }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
 
-                    // Docked Stylus Toolbar
                     val toolbarModifier = when (toolbarDock) {
                         ToolbarDock.TOP -> Modifier.align(Alignment.TopCenter).padding(top = 12.dp)
                         ToolbarDock.LEFT -> Modifier.align(Alignment.CenterStart).padding(start = 12.dp)
                         ToolbarDock.RIGHT -> Modifier.align(Alignment.CenterEnd).padding(end = 12.dp)
                     }
 
-                    StylusToolbar(
+                    MacFloatingToolDock(
                         vertical = toolbarDock != ToolbarDock.TOP,
                         toolMode = toolMode,
                         penStyle = penStyle,
@@ -513,14 +588,15 @@ fun EditorScreen(
                         modifier = toolbarModifier
                     )
 
-                    // Pen Color & Width Popover
                     if (showPenPopover) {
                         Surface(
-                            shadowElevation = 8.dp,
                             shape = RoundedCornerShape(16.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
                             modifier = Modifier
                                 .align(Alignment.TopCenter)
-                                .padding(top = 76.dp)
+                                .padding(top = 74.dp)
+                                .shadow(14.dp, RoundedCornerShape(16.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(16.dp))
                         ) {
                             Column(
                                 modifier = Modifier.padding(16.dp).width(340.dp),
@@ -531,20 +607,20 @@ fun EditorScreen(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("${penStyle.displayName} Settings", fontWeight = FontWeight.Bold)
-                                    IconButton(onClick = { showPenPopover = false }, modifier = Modifier.size(28.dp)) {
-                                        Icon(Icons.Default.Close, contentDescription = "Close")
+                                    Text("${penStyle.displayName} • Ink Studio", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                                    IconButton(onClick = { showPenPopover = false }, modifier = Modifier.size(26.dp)) {
+                                        Icon(Icons.Default.Close, contentDescription = "Close", modifier = Modifier.size(16.dp))
                                     }
                                 }
                                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     items(QUICK_COLORS) { col ->
                                         Box(
                                             modifier = Modifier
-                                                .size(32.dp)
+                                                .size(30.dp)
                                                 .clip(CircleShape)
                                                 .background(Color(col))
                                                 .border(
-                                                    width = if (col == penColorArgb) 3.dp else 1.dp,
+                                                    width = if (col == penColorArgb) 2.5.dp else 1.dp,
                                                     color = if (col == penColorArgb) MaterialTheme.colorScheme.primary else Color.Gray,
                                                     shape = CircleShape
                                                 )
@@ -552,24 +628,21 @@ fun EditorScreen(
                                         )
                                     }
                                 }
-                                Text("Thickness: ${penWidth.toInt()} px", fontSize = 12.sp)
-                                Slider(
-                                    value = penWidth,
-                                    onValueChange = { penWidth = it },
-                                    valueRange = 1.5f..36f
-                                )
+                                Text("Stroke Width: ${penWidth.toInt()} px", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Slider(value = penWidth, onValueChange = { penWidth = it }, valueRange = 1.5f..36f)
                             }
                         }
                     }
 
-                    // Lasso Floating Action Bar
                     if (selectedStrokeIds.isNotEmpty()) {
                         Surface(
-                            shadowElevation = 8.dp,
-                            shape = RoundedCornerShape(24.dp),
+                            shape = RoundedCornerShape(20.dp),
+                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(bottom = 24.dp)
+                                .shadow(12.dp, RoundedCornerShape(20.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(20.dp))
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -580,7 +653,7 @@ fun EditorScreen(
                                 QUICK_COLORS.take(4).forEach { col ->
                                     Box(
                                         modifier = Modifier
-                                            .size(24.dp)
+                                            .size(22.dp)
                                             .clip(CircleShape)
                                             .background(Color(col))
                                             .border(1.dp, Color.Gray, CircleShape)
@@ -588,36 +661,35 @@ fun EditorScreen(
                                     )
                                 }
                                 IconButton(onClick = { canvasViewRef?.deleteSelectedStrokes() }) {
-                                    Icon(Icons.Default.Delete, contentDescription = "Delete Selection", tint = MaterialTheme.colorScheme.error)
+                                    Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.error)
                                 }
                                 IconButton(onClick = { canvasViewRef?.clearSelection() }) {
-                                    Icon(Icons.Default.Close, contentDescription = "Clear Selection")
+                                    Icon(Icons.Default.Close, contentDescription = "Clear")
                                 }
                             }
                         }
                     }
 
-                    // Noteshelf-style Zoom Box (Close-Up Writing Window)
                     if (showZoomBox) {
                         Surface(
-                            shadowElevation = 12.dp,
-                            shape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp),
+                            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .fillMaxWidth()
                                 .height(250.dp)
-                                .border(2.dp, MaterialTheme.colorScheme.primary, RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
+                                .shadow(14.dp, RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+                                .border(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.8f), RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
                         ) {
                             Column(modifier = Modifier.fillMaxSize()) {
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .background(MaterialTheme.colorScheme.primaryContainer)
-                                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                                        .padding(horizontal = 14.dp, vertical = 4.dp),
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text("Zoom Box (2.2x)", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    Text("Zoom Box (2.2x Precision)", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                                     Row {
                                         IconButton(onClick = { zoomBoxPageX = (zoomBoxPageX - 220f).coerceAtLeast(0f) }) {
                                             Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Previous")
@@ -632,14 +704,12 @@ fun EditorScreen(
                                             Icon(Icons.Default.SubdirectoryArrowLeft, contentDescription = "Next Line")
                                         }
                                         IconButton(onClick = { showZoomBox = false }) {
-                                            Icon(Icons.Default.Close, contentDescription = "Close Zoom Box")
+                                            Icon(Icons.Default.Close, contentDescription = "Close")
                                         }
                                     }
                                 }
                                 AndroidView(
-                                    factory = { ctx ->
-                                        InkCanvasView(ctx).also { zoomBoxViewRef = it }
-                                    },
+                                    factory = { ctx -> InkCanvasView(ctx) },
                                     update = { zv ->
                                         zv.page = currentPage
                                         zv.pdfBackgroundBitmap = pdfKey?.let { pdfPageBitmaps[it] }
@@ -649,14 +719,11 @@ fun EditorScreen(
                                         zv.penColorArgb = penColorArgb
                                         zv.penWidth = penWidth
                                         zv.stylusOnlyMode = stylusOnlyMode
+                                        zv.pageLocked = true
                                         zv.shapeRecognitionEnabled = shapeRecognition
                                         zv.setViewport(2.2f, -zoomBoxPageX * 2.2f, -zoomBoxPageY * 2.2f)
-                                        zv.onStrokeCommitted = { stroke ->
-                                            pushUndoAndReplaceStrokes(currentPage.strokes + stroke)
-                                        }
-                                        zv.onStrokesReplaced = { newStrokes ->
-                                            pushUndoAndReplaceStrokes(newStrokes)
-                                        }
+                                        zv.onStrokeCommitted = { stroke -> pushUndoAndReplaceStrokes(currentPage.strokes + stroke) }
+                                        zv.onStrokesReplaced = { newStrokes -> pushUndoAndReplaceStrokes(newStrokes) }
                                     },
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -668,12 +735,146 @@ fun EditorScreen(
         }
     }
 
-    // Sticky Note Edit Dialog
+    // On-Device AI Studio Dialog (ML Kit Handwriting -> Text + Voice Read-Aloud + Insights)
+    if (showAiStudio) {
+        val insights = remember(aiRecognizedText) { InkAiEngine.buildSmartInsights(aiRecognizedText) }
+        AlertDialog(
+            onDismissRequest = {
+                aiEngine.stopSpeaking()
+                aiSpeaking = false
+                showAiStudio = false
+            },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(8.dp))
+                    Text("InkCraft AI Studio", fontWeight = FontWeight.Bold)
+                }
+            },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (aiLoading) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            Text("Running on-device ML Kit Digital Ink model...", fontSize = 13.sp)
+                        }
+                    } else if (aiError != null) {
+                        Text(aiError!!, color = MaterialTheme.colorScheme.error, fontSize = 13.sp)
+                    } else {
+                        Text("Recognized Handwriting (Editable)", style = MaterialTheme.typography.labelMedium)
+                        OutlinedTextField(
+                            value = aiRecognizedText,
+                            onValueChange = { aiRecognizedText = it },
+                            minLines = 4,
+                            maxLines = 8,
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        // Voice Read-Aloud Controls
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                modifier = Modifier.padding(10.dp)
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.VolumeUp, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Voice Read-Aloud", fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    listOf(0.85f to "0.85x", 1.0f to "1x", 1.25f to "1.25x").forEach { (rate, label) ->
+                                        FilterChip(
+                                            selected = aiSpeechRate == rate,
+                                            onClick = { aiSpeechRate = rate },
+                                            label = { Text(label, fontSize = 11.sp) }
+                                        )
+                                    }
+                                    Button(
+                                        onClick = {
+                                            if (aiSpeaking) {
+                                                aiEngine.stopSpeaking()
+                                                aiSpeaking = false
+                                            } else {
+                                                aiSpeaking = true
+                                                aiEngine.speak(aiRecognizedText, aiSpeechRate) {
+                                                    aiSpeaking = false
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(if (aiSpeaking) "Stop" else "Speak", fontSize = 12.sp)
+                                    }
+                                }
+                            }
+                        }
+
+                        // Smart Insights
+                        if (insights.wordCount > 0) {
+                            Text("Smart Insights (${insights.wordCount} words)", style = MaterialTheme.typography.labelMedium)
+                            if (insights.keyPoints.isNotEmpty()) {
+                                insights.keyPoints.forEach { pt ->
+                                    Text("• $pt", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            }
+                            if (insights.actionItems.isNotEmpty()) {
+                                Text("Detected Action Items", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                insights.actionItems.forEach { act ->
+                                    Text("☐ $act", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OutlinedButton(
+                                onClick = { clipboard.setText(AnnotatedString(aiRecognizedText)) },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Copy Text", fontSize = 12.sp)
+                            }
+                            Button(
+                                onClick = {
+                                    val note = StickyNote(x = 180f, y = 260f, width = 360f, height = 240f, text = aiRecognizedText)
+                                    mutateCurrentPage { it.copy(stickyNotes = it.stickyNotes + note) }
+                                    showAiStudio = false
+                                },
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Icon(Icons.Default.StickyNote2, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Insert Note", fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    aiEngine.stopSpeaking()
+                    aiSpeaking = false
+                    showAiStudio = false
+                }) { Text("Close") }
+            }
+        )
+    }
+
     editingStickyNote?.let { note ->
         var text by remember(note.id) { mutableStateOf(note.text) }
         AlertDialog(
             onDismissRequest = { editingStickyNote = null },
-            title = { Text("Sticky Note") },
+            title = { Text("Sticky Note", fontWeight = FontWeight.SemiBold) },
             text = {
                 OutlinedTextField(
                     value = text,
@@ -693,20 +894,17 @@ fun EditorScreen(
             },
             dismissButton = {
                 TextButton(onClick = {
-                    mutateCurrentPage { p ->
-                        p.copy(stickyNotes = p.stickyNotes.filterNot { it.id == note.id })
-                    }
+                    mutateCurrentPage { p -> p.copy(stickyNotes = p.stickyNotes.filterNot { it.id == note.id }) }
                     editingStickyNote = null
                 }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
             }
         )
     }
 
-    // Paper Template & Color Dialog
     if (showTemplateDialog) {
         AlertDialog(
             onDismissRequest = { showTemplateDialog = false },
-            title = { Text("Page Template & Paper") },
+            title = { Text("Page Template & Paper", fontWeight = FontWeight.SemiBold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Template", style = MaterialTheme.typography.labelMedium)
@@ -746,7 +944,42 @@ fun EditorScreen(
 }
 
 @Composable
-private fun StylusToolbar(
+private fun MacTitlebarPill(
+    selected: Boolean,
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit
+) {
+    Surface(
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+        shape = RoundedCornerShape(10.dp),
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = label,
+                tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(14.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                label,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
+private fun MacFloatingToolDock(
     vertical: Boolean,
     toolMode: ToolMode,
     penStyle: PenStyle,
@@ -759,10 +992,11 @@ private fun StylusToolbar(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shadowElevation = 6.dp,
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+        shape = RoundedCornerShape(22.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
         modifier = modifier
+            .shadow(12.dp, RoundedCornerShape(22.dp), ambientColor = Color.Black.copy(alpha = 0.14f))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.7f), RoundedCornerShape(22.dp))
     ) {
         val content: @Composable () -> Unit = {
             ToolBtn(Icons.Default.Draw, "Fountain", toolMode == ToolMode.PEN && penStyle == PenStyle.FOUNTAIN) {
@@ -780,22 +1014,20 @@ private fun StylusToolbar(
             ToolBtn(Icons.Default.CenterFocusStrong, "Laser", toolMode == ToolMode.PEN && penStyle == PenStyle.LASER) {
                 onSelectPenStyle(PenStyle.LASER)
             }
-            // Active Color Dot
             Box(
                 modifier = Modifier
                     .padding(4.dp)
-                    .size(28.dp)
+                    .size(26.dp)
                     .clip(CircleShape)
                     .background(Color(penColorArgb))
                     .border(2.dp, MaterialTheme.colorScheme.outline, CircleShape)
                     .clickable(onClick = onTogglePenPopover)
             )
-            // 1-Tap Pinned Presets
             presets.take(3).forEach { preset ->
                 Box(
                     modifier = Modifier
                         .padding(3.dp)
-                        .size(22.dp)
+                        .size(20.dp)
                         .clip(CircleShape)
                         .background(Color(preset.colorArgb))
                         .border(1.dp, Color.White, CircleShape)
@@ -817,37 +1049,26 @@ private fun StylusToolbar(
         }
 
         if (vertical) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp)
-            ) { content() }
+            Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.padding(vertical = 8.dp, horizontal = 6.dp)) { content() }
         } else {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-            ) { content() }
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) { content() }
         }
     }
 }
 
 @Composable
-private fun ToolBtn(
-    icon: ImageVector,
-    label: String,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
+private fun ToolBtn(icon: ImageVector, label: String, selected: Boolean, onClick: () -> Unit) {
     Surface(
         color = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-        shape = CircleShape,
+        shape = RoundedCornerShape(12.dp),
         modifier = Modifier.padding(2.dp)
     ) {
-        IconButton(onClick = onClick, modifier = Modifier.size(38.dp)) {
+        IconButton(onClick = onClick, modifier = Modifier.size(36.dp)) {
             Icon(
                 icon,
                 contentDescription = label,
                 tint = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(20.dp)
+                modifier = Modifier.size(18.dp)
             )
         }
     }
@@ -868,11 +1089,11 @@ private fun PageThumbnailsSidebar(
     onStopAudio: () -> Unit
 ) {
     Surface(
-        tonalElevation = 2.dp,
+        color = Color(0xFFF2F2F7),
         modifier = Modifier
-            .width(210.dp)
+            .width(214.dp)
             .fillMaxHeight()
-            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
+            .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f))
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
@@ -880,9 +1101,9 @@ private fun PageThumbnailsSidebar(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text("Pages", fontWeight = FontWeight.Bold)
-                IconButton(onClick = onAddPage, modifier = Modifier.size(32.dp)) {
-                    Icon(Icons.Default.Add, contentDescription = "Add Page")
+                Text("Pages", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                IconButton(onClick = onAddPage, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Default.Add, contentDescription = "Add Page", modifier = Modifier.size(18.dp))
                 }
             }
             LazyColumn(
@@ -897,10 +1118,10 @@ private fun PageThumbnailsSidebar(
                         shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(110.dp)
+                            .height(106.dp)
                             .border(
-                                width = if (selected) 3.dp else 1.dp,
-                                color = if (selected) MaterialTheme.colorScheme.primary else Color.Gray.copy(alpha = 0.4f),
+                                width = if (selected) 2.5.dp else 1.dp,
+                                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
                                 shape = RoundedCornerShape(10.dp)
                             )
                             .clickable { onSelectPage(idx) }
@@ -908,7 +1129,7 @@ private fun PageThumbnailsSidebar(
                         Box(modifier = Modifier.fillMaxSize().padding(8.dp)) {
                             Text(
                                 "Page ${idx + 1}\n${page.template.displayName}",
-                                fontSize = 12.sp,
+                                fontSize = 11.sp,
                                 color = if (page.paperColor.isDark) Color.White else Color.Black,
                                 modifier = Modifier.align(Alignment.TopStart)
                             )
@@ -917,16 +1138,16 @@ private fun PageThumbnailsSidebar(
                                     Icon(
                                         if (page.isBookmarked) Icons.Default.Bookmark else Icons.Default.BookmarkBorder,
                                         contentDescription = "Bookmark",
-                                        tint = if (page.isBookmarked) Color(0xFFF59E0B) else Color.Gray,
-                                        modifier = Modifier.size(16.dp)
+                                        tint = if (page.isBookmarked) Color(0xFFFF9500) else Color.Gray,
+                                        modifier = Modifier.size(15.dp)
                                     )
                                 }
                                 IconButton(onClick = { onDuplicatePage(idx) }, modifier = Modifier.size(26.dp)) {
-                                    Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate", modifier = Modifier.size(15.dp))
+                                    Icon(Icons.Default.ContentCopy, contentDescription = "Duplicate", modifier = Modifier.size(14.dp))
                                 }
                                 if (pages.size > 1) {
                                     IconButton(onClick = { onDeletePage(idx) }, modifier = Modifier.size(26.dp)) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(15.dp))
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(14.dp))
                                     }
                                 }
                             }
@@ -937,26 +1158,20 @@ private fun PageThumbnailsSidebar(
 
             if (audioMemos.isNotEmpty()) {
                 Column(modifier = Modifier.padding(10.dp)) {
-                    Text("Audio Memos", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    Text("AUDIO MEMOS", fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Spacer(Modifier.height(6.dp))
                     audioMemos.forEachIndexed { i, memo ->
                         Surface(
-                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            color = MaterialTheme.colorScheme.surface,
                             shape = RoundedCornerShape(8.dp),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 2.dp)
+                                .border(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f), RoundedCornerShape(8.dp))
                                 .clickable { if (isPlayingAudio) onStopAudio() else onPlayAudio(memo) }
                         ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(8.dp)
-                            ) {
-                                Icon(
-                                    if (isPlayingAudio) Icons.Default.Stop else Icons.Default.PlayArrow,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(18.dp)
-                                )
+                            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(8.dp)) {
+                                Icon(if (isPlayingAudio) Icons.Default.Stop else Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("Memo ${i + 1} (${memo.durationMs / 1000}s)", fontSize = 12.sp)
                             }

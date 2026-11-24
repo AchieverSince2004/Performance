@@ -1,5 +1,6 @@
 package com.inkcraft.app
 
+import com.inkcraft.app.ai.InkAiEngine
 import com.inkcraft.app.ink.InkMath
 import com.inkcraft.app.model.PenStyle
 import com.inkcraft.app.model.Stroke
@@ -97,5 +98,14 @@ class InkMathTest {
         )
         assertEquals(200f, sx, 0.1f)
         assertEquals(100f, sy, 0.1f)
+    }
+
+    @Test
+    fun aiSmartInsightsExtractsActionsAndKeyPoints() {
+        val sample = "Distributed systems lecture notes.\nRemember to review Raft consensus tomorrow.\nTodo: submit lab report."
+        val insights = InkAiEngine.buildSmartInsights(sample)
+        assertTrue(insights.wordCount >= 12)
+        assertTrue(insights.keyPoints.isNotEmpty())
+        assertEquals(2, insights.actionItems.size)
     }
 }
