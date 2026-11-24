@@ -1,0 +1,22 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Stylized Fountain Pen Nib -->
+    <path
+        android:fillColor="#6C8EEF"
+        android:pathData="M54,22 L72,56 L62,78 L46,78 L36,56 Z" />
+    <path
+        android:fillColor="#A5B4FC"
+        android:pathData="M54,22 L72,56 L62,78 L54,78 Z" />
+    <path
+        android:fillColor="#1A1B2E"
+        android:pathData="M52.5,22 L55.5,22 L55.5,52 L52.5,52 Z" />
+    <path
+        android:fillColor="#1A1B2E"
+        android:pathData="M54,50 m-4,0 a4,4 0 1,0 8,0 a4,4 0 1,0 -8,0" />
+    <path
+        android:fillColor="#F59E0B"
+        android:pathData="M43,78 L65,78 L65,85 L43,85 Z" />
+</vector>
