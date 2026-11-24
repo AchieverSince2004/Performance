@@ -78,7 +78,7 @@ class AudioMemoManager(private val context: Context, private val mediaDir: File)
                 setDataSource(file.absolutePath)
                 prepare()
                 setOnCompletionListener {
-                    isPlaying = false
+                    this@AudioMemoManager.isPlaying = false
                     onCompleted()
                 }
                 start()
