@@ -573,6 +573,12 @@ fun EditorScreen(
                             }
                             view.onViewportChanged = { scale, _, _ -> currentZoomScale = scale }
                             view.onLassoSelectionChanged = { ids -> selectedStrokeIds = ids }
+                            view.onPageSwipe = { delta ->
+                                val next = safePageIdx + delta
+                                if (next in 0..notebook.pages.lastIndex) {
+                                    currentPageIdx = next
+                                }
+                            }
                         },
                         modifier = Modifier.fillMaxSize()
                     )
@@ -740,6 +746,21 @@ fun EditorScreen(
                                 modifier = Modifier.size(30.dp)
                             ) {
                                 Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = "Next Page", modifier = Modifier.size(16.dp))
+                            }
+                            IconButton(
+                                onClick = {
+                                    val newPage = NotePage(
+                                        pageIndex = notebook.pages.size,
+                                        template = currentPage.template,
+                                        paperColor = currentPage.paperColor
+                                    )
+                                    val updated = notebook.pages + newPage
+                                    onUpdateNotebook(notebook.copy(pages = updated))
+                                    currentPageIdx = updated.lastIndex
+                                },
+                                modifier = Modifier.size(30.dp)
+                            ) {
+                                Icon(Icons.Default.Add, contentDescription = "New Page", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
                             }
 
                             Box(Modifier.width(1.dp).height(18.dp).background(MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)))

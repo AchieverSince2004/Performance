@@ -88,6 +88,11 @@ class InkCanvasView(context: Context) : View(context) {
     var onTextBoxAdded: ((Float, Float) -> Unit)? = null
     var onViewportChanged: ((Float, Float, Float) -> Unit)? = null
     var onLassoSelectionChanged: ((Set<String>) -> Unit)? = null
+    var onPageSwipe: ((Int) -> Unit)? = null
+
+    private var fingerStartX = 0f
+    private var fingerStartY = 0f
+    private var fingerScrollActive = false
 
     private val activePoints = mutableListOf<StrokePoint>()
     private var isDrawing = false
@@ -555,13 +560,51 @@ class InkCanvasView(context: Context) : View(context) {
             }
 
             if (stylusOnlyMode) {
-                if (event.actionMasked == MotionEvent.ACTION_DOWN && !isPalmOrRejectedTouch(event)) {
-                    val (px, py) = screenToPage(event.x, event.y)
-                    page.stickyNotes.lastOrNull { px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height) }?.let {
-                        onStickyNoteTapped?.invoke(it)
+                if (isPalmOrRejectedTouch(event) || event.getTouchMajor(0) > 85f) {
+                    fingerScrollActive = false
+                    isPanning = false
+                    return true
+                }
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        val (px, py) = screenToPage(event.x, event.y)
+                        val hitNote = page.stickyNotes.lastOrNull {
+                            px in it.x..(it.x + it.width) && py in it.y..(it.y + it.height)
+                        }
+                        if (hitNote != null) {
+                            onStickyNoteTapped?.invoke(hitNote)
+                            return true
+                        }
+                        fingerStartX = event.x
+                        fingerStartY = event.y
+                        prevFocusY = event.y
+                        fingerScrollActive = true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        if (fingerScrollActive) {
+                            val dy = event.y - prevFocusY
+                            prevFocusY = event.y
+                            // Scroll vertically only so page never drifts sideways while scrolling
+                            if (kotlin.math.abs(event.y - fingerStartY) > 12f) {
+                                panY += dy
+                                clampPan()
+                                onViewportChanged?.invoke(zoomScale, panX, panY)
+                                invalidate()
+                            }
+                        }
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        if (fingerScrollActive) {
+                            val totalDx = event.x - fingerStartX
+                            val totalDy = event.y - fingerStartY
+                            if (kotlin.math.abs(totalDx) > 130f && kotlin.math.abs(totalDx) > kotlin.math.abs(totalDy) * 1.35f) {
+                                onPageSwipe?.invoke(if (totalDx < 0f) 1 else -1)
+                            }
+                        }
+                        fingerScrollActive = false
+                        isPanning = false
                     }
                 }
-                isPanning = false
                 return true
             }
 
